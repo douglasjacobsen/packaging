@@ -1,4 +1,4 @@
-modules (3.2.10-1ubuntu1~ppa1~precise1) precise; urgency=low
+modules (3.2.10-1ubuntu1~ppa1~raring1) raring; urgency=low
 
   * Version 3.2.10 of the software modules package
 
