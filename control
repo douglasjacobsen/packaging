@@ -1,0 +1,15 @@
+Source: mpas-ocean-model
+Section: science
+Priority: extra
+Maintainer: Doug Jacobsen <jacobsen.douglas@gmail.com>
+Build-Depends: debhelper (>= 8.0.0), gfortran, libnetcdf-dev, libopenmpi-dev, subversion, python, build-essential, libc6-dev, gcc-multilib, libpnetcdf-dev (>= 1.3.1-1), libpio-dev (>= 1.7.2-1), libpnetcdf-dev (<< 1.3.1-1.1), libpio-dev (<= 1.7.2-1.1)
+Standards-Version: 3.9.3
+Homepage: https://github.com/MPAS-Dev/MPAS-Release
+#Vcs-Git: git://git.debian.org/collab-maint/mpas-ocean-model.git
+#Vcs-Browser: http://git.debian.org/?p=collab-maint/mpas-ocean-model.git;a=summary
+
+Package: mpas-ocean-model
+Architecture: any
+Depends: ${misc:Depends}, gfortran, libopenmpi-dev, build-essential, libnetcdf-dev
+Description: Version 1.0 of MPAS-Ocean model.
+ Built with gfortran 4.6.3, pnetcdf 1.3.1, pio 1.7.2.

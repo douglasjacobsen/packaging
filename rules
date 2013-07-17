@@ -1,0 +1,36 @@
+#!/usr/bin/make -f
+# -*- makefile -*-
+# Sample debian/rules that uses debhelper.
+# This file was originally written by Joey Hess and Craig Small.
+# As a special exception, when this file is copied by dh-make into a
+# dh-make output file, you may use that output file without restriction.
+# This special exception was added by Craig Small in version 0.37 of dh-make.
+
+# Uncomment this to turn on verbose mode.
+#export DH_VERBOSE=1
+
+%:
+	dh $@ 
+
+override_dh_auto_configure:
+	
+
+override_dh_auto_clean:
+	make clean CORE=ocean
+
+override_dh_auto_build:
+	chmod a+x src/core_ocean/cvmix/makedep.py
+	make gfortran CORE=ocean NETCDF=/usr PNETCDF=/usr PIO=/usr
+	cp ocean_model mpas-ocean-model
+	make clean CORE=ocean
+	make gfortran CORE=ocean NETCDF=/usr PNETCDF=/usr PIO=/usr DEBUG=true
+	cp ocean_model mpas-ocean-model-debug
+
+override_dh_auto_install:
+	mkdir -p $(CURDIR)/debian/tmp/usr/bin
+	cp mpas-ocean-model $(CURDIR)/debian/tmp/usr/bin/mpas-ocean-model
+	cp mpas-ocean-model-debug $(CURDIR)/debian/tmp/usr/bin/mpas-ocean-model-debug
+	mkdir -p $(CURDIR)/debian/tmp/usr/share/doc/mpas-ocean-model
+	cp mpas_ocean_users_guide_1.0.pdf $(CURDIR)/debian/tmp/usr/share/doc/mpas-ocean-model/.
+	cp namelist.input.ocean $(CURDIR)/debian/tmp/usr/share/doc/mpas-ocean-model/namelist.input
+

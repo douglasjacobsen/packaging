@@ -1,0 +1,5 @@
+mpas-ocean-model (1.0-1ubuntu1~ppa1~precise1) precise; urgency=low
+
+  * Version 1.0 of the MPAS-Ocean model
+
+ -- Doug Jacobsen <jacobsen.douglas@gmail.com>  Thu, 11 Jul 2013 14:40:58 -0600

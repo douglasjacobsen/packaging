@@ -1,0 +1,3727 @@
+Description: <short summary of the patch>
+ TODO: Put a short summary on the line above and replace this paragraph
+ with a longer explanation of this change. Complete the meta-information
+ with other relevant fields (see below for details). To make it easier, the
+ information below has been extracted from the changelog. Adjust it or drop
+ it.
+ .
+ mpas-ocean-model (1.0-1) precise; urgency=low
+ .
+   * Version 1.0 of the MPAS-Ocean model
+Author: Doug Jacobsen <jacobsen.douglas@gmail.com>
+
+---
+The information above should follow the Patch Tagging Guidelines, please
+checkout http://dep.debian.net/deps/dep3/ to learn about the format. Here
+are templates for supplementary fields that you might want to add:
+
+Origin: <vendor|upstream|other>, <url of original patch>
+Bug: <url in upstream bugtracker>
+Bug-Debian: http://bugs.debian.org/<bugnumber>
+Bug-Ubuntu: https://launchpad.net/bugs/<bugnumber>
+Forwarded: <no|not-needed|url proving that it has been forwarded>
+Reviewed-By: <name and email of someone who approved the patch>
+Last-Update: <YYYY-MM-DD>
+
+--- mpas-ocean-model-1.0.orig/src/core_ocean/Makefile
++++ mpas-ocean-model-1.0/src/core_ocean/Makefile
+@@ -50,9 +50,9 @@ OBJS = mpas_ocn_mpas_core.o \
+ all: libcvmix core_hyd
+ 
+ libcvmix:
+-	if [ ! -d cvmix ]; then \
+-		(svn checkout $(CVMIX_REPO_ADDRESS) cvmix) \
+-	fi
++	#if [ ! -d cvmix ]; then \
++	#	(svn checkout $(CVMIX_REPO_ADDRESS) cvmix) \
++	#fi
+ 	if [ -d cvmix ]; then \
+ 		(cd cvmix; svn update; make all FC="$(FC)" FFLAGS="$(FFLAGS)" FINCLUDES="$(FINCLUDES)") \
+ 	fi
+@@ -195,4 +195,4 @@ clean:
+ .F.o:
+ 	$(RM) $@ $*.mod
+ 	$(CPP) $(CPPFLAGS) $(CPPINCLUDES) $< > $*.f90
+-	$(FC) $(FFLAGS) -c $*.f90 $(FCINCLUDES) -I../framework -I../operators -I../external/esmf_time_f90
+\ No newline at end of file
++	$(FC) $(FFLAGS) -c $*.f90 $(FCINCLUDES) -I../framework -I../operators -I../external/esmf_time_f90
+--- /dev/null
++++ mpas-ocean-model-1.0/src/core_ocean/cvmix/cvmix_tidal.F90
+@@ -0,0 +1,445 @@
++ module cvmix_tidal
++
++!BOP
++!\newpage
++! !MODULE: cvmix_tidal
++!
++! !DESCRIPTION:
++!  This module contains routines to initialize the derived types needed for
++!  tidal mixing (currently just the Simmons scheme) and to set the viscosity
++!  and diffusivity coefficients accordingly.
++!\\
++!\\
++!
++! !REVISION HISTORY:
++!  SVN:$Id: cvmix_tidal.F90 163 2013-06-10 23:04:17Z mike.levy.work@gmail.com $
++!  SVN:$URL: http://cvmix.googlecode.com/svn/trunk/src/shared/cvmix_tidal.F90 $
++
++! !USES:
++
++   use cvmix_kinds_and_types, only : cvmix_r8,                 &
++                                     cvmix_data_type,          &
++                                     cvmix_strlen,             &
++                                     cvmix_global_params_type
++!EOP
++
++   implicit none
++   private
++   save
++
++!BOP
++
++! !PUBLIC MEMBER FUNCTIONS:
++
++   public :: cvmix_init_tidal
++   public :: cvmix_compute_vert_dep
++   public :: cvmix_coeffs_tidal
++   public :: cvmix_put_tidal
++   public :: cvmix_get_tidal_real
++   public :: cvmix_get_tidal_str
++
++   interface cvmix_put_tidal
++     module procedure cvmix_put_tidal_real
++     module procedure cvmix_put_tidal_str
++   end interface cvmix_put_tidal
++
++! !PUBLIC TYPES:
++
++   ! cvmix_tidal_params_type contains the necessary parameters for tidal mixing
++   ! (currently just Simmons)
++   type, public :: cvmix_tidal_params_type
++      private
++      character(len=cvmix_strlen) :: mix_scheme
++      real(cvmix_r8)              :: efficiency
++      real(cvmix_r8)              :: vertical_decay_scale
++      real(cvmix_r8)              :: max_coefficient
++      real(cvmix_r8)              :: local_mixing_frac
++      real(cvmix_r8)              :: depth_cutoff
++   end type cvmix_tidal_params_type
++!EOP
++
++ contains
++
++!BOP
++
++! !IROUTINE: cvmix_init_tidal
++! !INTERFACE:
++
++  subroutine cvmix_init_tidal(CVmix_tidal_params, mix_scheme, units,          &
++                              efficiency, vertical_decay_scale,               &
++                              max_coefficient, local_mixing_frac, depth_cutoff)
++
++! !DESCRIPTION:
++!  Initialization routine for tidal mixing. There is currently just one
++!  supported schemes - set \verb|mix_scheme = 'simmons'| to use the Simmons
++!  mixing scheme.
++!
++! !USES:
++!  Only those used by entire module.
++
++! !INPUT PARAMETERS:
++    character(len=*),         intent(in) :: mix_scheme
++    character(len=*),         intent(in) :: units
++    real(cvmix_r8), optional, intent(in) :: efficiency
++    real(cvmix_r8), optional, intent(in) :: vertical_decay_scale
++    real(cvmix_r8), optional, intent(in) :: max_coefficient
++    real(cvmix_r8), optional, intent(in) :: local_mixing_frac
++    real(cvmix_r8), optional, intent(in) :: depth_cutoff
++
++! !OUTPUT PARAMETERS:
++    type(cvmix_tidal_params_type), intent(inout) :: CVmix_tidal_params
++!EOP
++!BOC
++
++    select case (trim(mix_scheme))
++      case ('simmons','Simmons')
++        CVmix_tidal_params%mix_scheme = trim(mix_scheme)
++
++        ! Unitless parameters
++        if (present(efficiency)) then
++          CVmix_tidal_params%efficiency = efficiency
++        else
++          CVmix_tidal_params%efficiency = 0.2_cvmix_r8
++        end if
++        if (present(local_mixing_frac)) then
++          CVmix_tidal_params%local_mixing_frac = local_mixing_frac
++        else
++          CVmix_tidal_params%local_mixing_frac = 1.0_cvmix_r8/3.0_cvmix_r8
++        end if
++
++        ! Parameters with units
++        if (present(vertical_decay_scale)) then
++          CVmix_tidal_params%vertical_decay_scale = vertical_decay_scale
++        end if
++        if (present(max_coefficient)) then
++          CVmix_tidal_params%max_coefficient = max_coefficient
++        end if
++        if (present(depth_cutoff)) then
++          CVmix_tidal_params%depth_cutoff = depth_cutoff
++        else
++          ! Default: no cutoff depth => 0 cm or 0 m
++          CVmix_tidal_params%depth_cutoff = 0.0_cvmix_r8
++        end if
++        select case (trim(units))
++          case ('mks')
++            if (.not.present(vertical_decay_scale)) then
++              CVmix_tidal_params%vertical_decay_scale = 500.0_cvmix_r8
++            end if
++            if (.not.present(max_coefficient)) then
++              CVmix_tidal_params%max_coefficient = 50.0e-4_cvmix_r8
++            end if
++
++          case ('cgs')
++            if (.not.present(vertical_decay_scale)) then
++              CVmix_tidal_params%vertical_decay_scale = 500.0e2_cvmix_r8
++            end if
++            if (.not.present(max_coefficient)) then
++              CVmix_tidal_params%max_coefficient = 50.0_cvmix_r8
++            end if
++
++          case DEFAULT
++            print*, "ERROR: ", trim(units), " is not a valid choice for ",    &
++                    "tidal mixing. Only 'mks' and 'cgs' are supported."
++            stop 1
++
++        end select
++
++      case DEFAULT
++        print*, "ERROR: ", trim(mix_scheme), " is not a valid choice for ", &
++                "tidal mixing."
++        stop 1
++
++    end select
++
++!EOC
++
++  end subroutine cvmix_init_tidal
++
++!BOP
++
++! !IROUTINE: cvmix_coeffs_tidal
++! !INTERFACE:
++
++  subroutine cvmix_coeffs_tidal(CVmix_vars, CVmix_tidal_params, CVmix_params, &
++                                energy_flux)
++
++! !DESCRIPTION:
++!  Computes vertical diffusion coefficients for tidal mixing
++!  parameterizatiions.
++!\\
++!\\
++!
++! !USES:
++!  only those used by entire module.
++
++! !INPUT PARAMETERS:
++    type(cvmix_tidal_params_type),  intent(in) :: CVmix_tidal_params
++    type(cvmix_global_params_type), intent(in) :: CVmix_params
++    real(cvmix_r8),                 intent(in) :: energy_flux
++
++! !INPUT/OUTPUT PARAMETERS:
++    type(cvmix_data_type), intent(inout) :: CVmix_vars
++
++!EOP
++!BOC
++
++    ! Local variables
++    integer        :: nlev, k
++    real(cvmix_r8) :: coef, rho, buoy, z_cut
++    real(cvmix_r8), allocatable, dimension(:) :: vert_dep
++
++    nlev = CVmix_vars%nlev
++    rho  = CVmix_params%fw_rho
++
++    select case (trim(CVmix_tidal_params%mix_scheme))
++      case ('simmons','Simmons')
++        allocate(vert_dep(nlev+1))
++        vert_dep = cvmix_compute_vert_dep(CVmix_vars, CVmix_tidal_params)
++        coef = CVmix_tidal_params%local_mixing_frac * &
++               CVmix_tidal_params%efficiency *        &
++               energy_flux
++        CVmix_vars%diff_iface = 0.0_cvmix_r8
++        if (CVmix_vars%ocn_depth.ge.CVmix_tidal_params%depth_cutoff) then
++          do k=1, nlev+1
++            buoy = CVmix_vars%buoy_iface(k)
++            z_cut = CVmix_tidal_params%depth_cutoff
++            if (buoy.gt.0.0_cvmix_r8) &
++              CVmix_vars%diff_iface(k,1) = coef*vert_dep(k)/(rho*buoy)
++            if (CVmix_vars%diff_iface(k,1).gt.CVmix_tidal_params%max_coefficient) &
++              CVmix_vars%diff_iface(k,1) = CVmix_tidal_params%max_coefficient
++          end do
++        end if
++        deallocate(vert_dep)
++
++      case DEFAULT
++        ! Note: this error should be caught in cvmix_init_tidal
++        print*, "ERROR: invalid choice for type of tidal mixing."
++        stop 1
++
++    end select
++
++!EOC
++
++  end subroutine cvmix_coeffs_tidal
++
++!BOP
++
++! !IROUTINE: cvmix_compute_vert_dep
++! !INTERFACE:
++
++  function cvmix_compute_vert_dep(CVmix_vars, CVmix_tidal_params)
++
++! !DESCRIPTION:
++!  Computes the vertical deposition function needed for Simmons et al tidal
++!  mixing.
++!\\
++!\\
++!
++! !USES:
++!  only those used by entire module.
++
++! !INPUT PARAMETERS:
++    type(cvmix_tidal_params_type), intent(in) :: CVmix_tidal_params
++    type(cvmix_data_type),         intent(in) :: CVmix_vars
++
++! !OUTPUT PARAMETERS:
++    real(cvmix_r8), dimension(CVMix_vars%nlev+1) :: cvmix_compute_vert_dep
++
++!EOP
++!BOC
++
++    ! Local variables
++    real(cvmix_r8) :: tot_area, num, thick
++    integer        :: k, nlev
++
++    nlev = CVmix_vars%nlev
++
++    ! Compute vertical deposition
++    tot_area = 0.0_cvmix_r8
++    cvmix_compute_vert_dep(1) = 0.0_cvmix_r8
++    cvmix_compute_vert_dep(nlev+1) = 0.0_cvmix_r8
++    do k=2,nlev
++      num = -CVmix_vars%zw_iface(k)/CVmix_tidal_params%vertical_decay_scale
++      ! Simmons vertical deposition
++      ! Note that it is getting normalized (divide through by tot_area)
++      ! So multiplicative constants that are independent of z are omitted
++      cvmix_compute_vert_dep(k) = exp(num)
++
++      ! Compute integral of vert_dep via trapezoid rule
++      ! (looks like midpoint rule, but vert_dep = 0 at z=0 and z=-ocn_depth)
++      thick = CVmix_vars%zt(k-1) - CVmix_vars%zt(k)
++      tot_area = tot_area + cvmix_compute_vert_dep(k)*thick
++    end do
++    ! Normalize vert_dep (need integral = 1.0D0)
++    cvmix_compute_vert_dep = cvmix_compute_vert_dep/tot_area
++
++!EOC
++
++  end function cvmix_compute_vert_dep
++
++!BOP
++
++! !IROUTINE: cvmix_put_tidal_real
++! !INTERFACE:
++
++  subroutine cvmix_put_tidal_real(CVmix_tidal_params, varname, val)
++
++! !DESCRIPTION:
++!  Write a real value into a cvmix\_tidal\_params\_type variable.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    character(len=*), intent(in) :: varname
++    real(cvmix_r8),   intent(in) :: val
++
++! !OUTPUT PARAMETERS:
++    type(cvmix_tidal_params_type), intent(inout) :: CVmix_tidal_params
++!EOP
++!BOC
++
++    select case (trim(varname))
++      case ('efficiency')
++        CVmix_tidal_params%efficiency = val
++      case ('vertical_decay_scale')
++        CVmix_tidal_params%vertical_decay_scale = val
++      case ('max_coefficient')
++        CVmix_tidal_params%max_coefficient = val
++      case ('local_mixing_frac')
++        CVmix_tidal_params%local_mixing_frac = val
++      case ('depth_cutoff')
++        CVmix_tidal_params%depth_cutoff = val
++      case DEFAULT
++        print*, "ERROR: ", trim(varname), " not a valid choice!"
++        stop 1
++      
++    end select
++
++!EOC
++
++  end subroutine cvmix_put_tidal_real
++
++!BOP
++
++! !IROUTINE: cvmix_put_tidal_str
++! !INTERFACE:
++
++  subroutine cvmix_put_tidal_str(CVmix_tidal_params, varname, val)
++
++! !DESCRIPTION:
++!  Write a string into a cvmix\_tidal\_params\_type variable.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    character(len=*), intent(in) :: varname
++    character(len=*), intent(in) :: val
++
++! !OUTPUT PARAMETERS:
++    type(cvmix_tidal_params_type), intent(inout) :: CVmix_tidal_params
++!EOP
++!BOC
++
++    select case (trim(varname))
++      case ('mix_scheme')
++        CVmix_tidal_params%mix_scheme = val
++      case DEFAULT
++        print*, "ERROR: ", trim(varname), " not a valid choice!"
++        stop 1
++      
++    end select
++
++!EOC
++
++  end subroutine cvmix_put_tidal_str
++
++!BOP
++
++! !IROUTINE: cvmix_get_tidal_real
++! !INTERFACE:
++
++  function cvmix_get_tidal_real(CVmix_tidal_params, varname)
++
++! !DESCRIPTION:
++!  Returns the real value of a cvmix\_tidal\_params\_type variable.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    character(len=*), intent(in) :: varname
++    type(cvmix_tidal_params_type), intent(in) :: CVmix_tidal_params
++
++! !OUTPUT PARAMETERS:
++    real(cvmix_r8) :: cvmix_get_tidal_real
++!EOP
++!BOC
++
++    cvmix_get_tidal_real = 0.0_cvmix_r8
++    select case (trim(varname))
++      case ('efficiency')
++        cvmix_get_tidal_real = CVmix_tidal_params%efficiency
++      case ('vertical_decay_scale')
++        cvmix_get_tidal_real = CVmix_tidal_params%vertical_decay_scale
++      case ('max_coefficient')
++        cvmix_get_tidal_real = CVmix_tidal_params%max_coefficient
++      case ('local_mixing_frac')
++        cvmix_get_tidal_real = CVmix_tidal_params%local_mixing_frac
++      case ('depth_cutoff')
++        cvmix_get_tidal_real = CVmix_tidal_params%depth_cutoff
++      case DEFAULT
++        print*, "ERROR: ", trim(varname), " not a valid choice!"
++        stop 1
++      
++    end select
++
++!EOC
++
++  end function cvmix_get_tidal_real
++
++!BOP
++
++! !IROUTINE: cvmix_get_tidal_str
++! !INTERFACE:
++
++  function cvmix_get_tidal_str(CVmix_tidal_params, varname)
++
++! !DESCRIPTION:
++!  Returns the string value of a cvmix\_tidal\_params\_type variable.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    character(len=*), intent(in) :: varname
++    type(cvmix_tidal_params_type), intent(inout) :: CVmix_tidal_params
++
++! !OUTPUT PARAMETERS:
++    character(len=cvmix_strlen) :: cvmix_get_tidal_str
++!EOP
++!BOC
++
++    select case (trim(varname))
++      case ('mix_scheme')
++        cvmix_get_tidal_str = CVmix_tidal_params%mix_scheme
++      case DEFAULT
++        print*, "ERROR: ", trim(varname), " not a valid choice!"
++        stop 1
++      
++    end select
++
++!EOC
++
++  end function cvmix_get_tidal_str
++
++end module cvmix_tidal
+--- /dev/null
++++ mpas-ocean-model-1.0/src/core_ocean/cvmix/cvmix_kpp.F90
+@@ -0,0 +1,438 @@
++!|||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
++
++ module cvmix_kpp
++
++!BOP
++!\newpage
++! !MODULE: cvmix_kpp
++!
++! !DESCRIPTION:
++!  This module contains routines to initialize the derived types needed for
++!  KPP mixing and to set the viscosity and diffusivity coefficients
++!  accordingly.
++!\\
++!\\
++!
++! !REVISION HISTORY:
++!  SVN:$Id: cvmix_kpp.F90 183 2013-07-11 21:11:32Z mike.levy.work@gmail.com $
++!  SVN:$URL: http://cvmix.googlecode.com/svn/trunk/src/shared/cvmix_kpp.F90 $
++
++! !USES:
++
++  use cvmix_kinds_and_types, only : cvmix_r8,                &
++                                    cvmix_data_type
++  use cvmix_put_get, only :         cvmix_put
++
++!EOP
++
++  implicit none
++  private
++  save
++
++!BOP
++
++! !DEFINED PARAMETERS:
++  integer, parameter        :: CVMIX_KPP_INTERP_LINEAR      = 1
++  integer, parameter        :: CVMIX_KPP_INTERP_QUAD        = 2
++  integer, parameter        :: CVMIX_KPP_INTERP_CUBE_SPLINE = 3
++  integer, parameter        :: CVMIX_KPP_MAX_NEWTON_ITERS   = 100
++  real(cvmix_r8), parameter :: CVMIX_KPP_NEWTON_TOL         = 1.0e-12_cvmix_r8
++
++! !PUBLIC MEMBER FUNCTIONS:
++
++  public :: cvmix_init_kpp
++  public :: cvmix_coeffs_kpp
++  public :: cvmix_put_kpp
++  public :: cvmix_kpp_compute_OBL_depth ! MNL: I think we want this public
++
++  interface cvmix_put_kpp
++    module procedure cvmix_put_kpp_int
++    module procedure cvmix_put_kpp_real
++  end interface cvmix_put_kpp
++
++  interface cvmix_kpp_compute_OBL_depth
++    module procedure cvmix_kpp_compute_OBL_depth_low
++    module procedure cvmix_kpp_compute_OBL_depth_wrap
++  end interface cvmix_kpp_compute_OBL_depth
++
++! !PUBLIC TYPES:
++
++  ! cvmix_kpp_params_type contains the necessary parameters for KPP mixing
++  type, public :: cvmix_kpp_params_type
++    private
++    real(cvmix_r8) :: Ri_crit
++    integer        :: interp_type
++  end type cvmix_kpp_params_type
++
++!EOP
++
++contains
++
++!BOP
++
++! !IROUTINE: cvmix_init_kpp
++! !INTERFACE:
++
++  subroutine cvmix_init_kpp(CVmix_kpp_params, ri_crit, interp_type)
++
++! !DESCRIPTION:
++!  Initialization routine for KPP mixing.
++!
++! !USES:
++!  Only those used by entire module.
++
++! !INPUT PARAMETERS:
++    real(cvmix_r8),   optional :: ri_crit
++    character(len=*), optional :: interp_type
++
++! !OUTPUT PARAMETERS:
++    type(cvmix_kpp_params_type), intent(inout) :: CVmix_kpp_params
++
++!EOP
++!BOC
++
++    if (present(ri_crit)) then
++      call cvmix_put_kpp(CVmix_kpp_params, 'Ri_crit', ri_crit)
++    else
++      call cvmix_put_kpp(CVmix_kpp_params, 'Ri_crit', 0.3_cvmix_r8)
++    end if
++
++    if (present(interp_type)) then
++      select case (trim(interp_type))
++        case ('line', 'linear')
++          call cvmix_put_kpp(CVmix_kpp_params, 'interp_type', &
++                             CVMIX_KPP_INTERP_LINEAR)
++        case ('quad', 'quadratic')
++          call cvmix_put_kpp(CVmix_kpp_params, 'interp_type', &
++                             CVMIX_KPP_INTERP_QUAD)
++        case ('cube', 'cubic', 'cubic_spline', 'cubic spline')
++          call cvmix_put_kpp(CVmix_kpp_params, 'interp_type', &
++                             CVMIX_KPP_INTERP_CUBE_SPLINE)
++        case DEFAULT
++          print*, "ERROR: ", trim(interp_type), " is not a valid type of ", &
++                  "interpolation!"
++          stop 1
++      end select
++    else
++      call cvmix_put_kpp(CVmix_kpp_params, 'interp_type', &
++                         CVMIX_KPP_INTERP_QUAD)
++    end if
++!EOC
++
++  end subroutine cvmix_init_kpp
++
++!***********************************************************************
++!BOP
++! !IROUTINE: cvmix_coeffs_kpp
++! !INTERFACE:
++
++  subroutine cvmix_coeffs_kpp(CVmix_vars, CVmix_kpp_params)
++
++! !DESCRIPTION:
++!  Computes vertical diffusion coefficients for the double diffusion mixing
++!  parameterizatiion.
++!\\
++!\\
++!
++! !USES:
++!  only those used by entire module.
++
++! !INPUT PARAMETERS:
++    type(cvmix_kpp_params_type), intent(in) :: CVmix_kpp_params
++
++! !INPUT/OUTPUT PARAMETERS:
++    type(cvmix_data_type), intent(inout) :: CVmix_vars
++
++!EOP
++!BOC
++
++    call cvmix_kpp_compute_OBL_depth(CVmix_kpp_params, CVmix_vars)
++    CVmix_vars%visc_iface = CVmix_kpp_params%Ri_crit
++    CVmix_vars%diff_iface = CVmix_kpp_params%Ri_crit
++
++!EOC
++  end subroutine cvmix_coeffs_kpp
++
++!BOP
++
++! !IROUTINE: cvmix_put_kpp_real
++! !INTERFACE:
++
++  subroutine cvmix_put_kpp_real(CVmix_kpp_params, varname, val)
++
++! !DESCRIPTION:
++!  Write a real value into a cvmix\_kpp\_params\_type variable.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    character(len=*), intent(in) :: varname
++    real(cvmix_r8),   intent(in) :: val
++
++! !OUTPUT PARAMETERS:
++    type(cvmix_kpp_params_type), intent(inout) :: CVmix_kpp_params
++!EOP
++!BOC
++
++    select case (trim(varname))
++      case ('Ri_crit')
++        CVmix_kpp_params%Ri_crit = val
++      case DEFAULT
++        print*, "ERROR: ", trim(varname), " not a valid choice!"
++        stop 1
++    end select
++
++!EOC
++
++  end subroutine cvmix_put_kpp_real
++
++!BOP
++
++! !IROUTINE: cvmix_put_kpp_int
++! !INTERFACE:
++
++  subroutine cvmix_put_kpp_int(CVmix_kpp_params, varname, val)
++
++! !DESCRIPTION:
++!  Write an integer value into a cvmix\_kpp\_params\_type variable.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    character(len=*), intent(in) :: varname
++    integer,          intent(in) :: val
++
++! !OUTPUT PARAMETERS:
++    type(cvmix_kpp_params_type), intent(inout) :: CVmix_kpp_params
++!EOP
++!BOC
++
++    select case (trim(varname))
++      case ('interp_type')
++        CVmix_kpp_params%interp_type = val
++      case DEFAULT
++        call cvmix_put_kpp(CVmix_kpp_params, varname, real(val, cvmix_r8))
++    end select
++
++!EOC
++
++  end subroutine cvmix_put_kpp_int
++
++!BOP
++
++! !IROUTINE: cvmix_kpp_compute_OBL_depth_low
++! !INTERFACE:
++
++  subroutine cvmix_kpp_compute_OBL_depth_low(CVmix_kpp_params, Ri_bulk, depth, &
++                                             OBL_depth)
++
++! !DESCRIPTION:
++!  Computes the depth of the ocean boundary layer (OBL) for a given column
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    type(cvmix_kpp_params_type),  intent(in) :: CVmix_kpp_params
++    real(cvmix_r8), dimension(:), intent(in) :: Ri_bulk, depth
++
++! !OUTPUT PARAMETERS:
++    real(cvmix_r8), intent(out) :: OBL_depth
++
++!EOP
++!BOC
++
++    ! Local variables
++    integer :: nlev, kt, k
++    real(kind=cvmix_r8) :: a, b, c, d, det
++    real(kind=cvmix_r8), dimension(:,:), allocatable :: Minv
++    real(kind=cvmix_r8), dimension(:),   allocatable :: rhs
++
++    nlev = size(Ri_bulk)
++    if (nlev.ne.size(depth)) then
++      print*, "ERROR: Ri_bulk and depth must be same size!"
++      stop 1
++    end if
++
++    ! Interpolation Step
++    ! (1) Find kt such that Ri_bulk at level kt+1 > Ri_crit
++    do kt=1,nlev-1
++      if (Ri_bulk(kt+1).ge.CVmix_kpp_params%ri_crit) &
++        exit
++    end do
++    if (kt.eq.nlev) then
++      print*, "ERROR: Entire column is above the boundary layer!"
++      stop 1
++    end if
++
++    ! All interpolation assumes form of
++    ! y = ax^3 + bx^2 + cx + d
++    ! linear => a = b = 0
++    ! quad   => a = 0
++    a = 0.0_cvmix_r8
++    b = 0.0_cvmix_r8
++    c = 0.0_cvmix_r8
++    d = 0.0_cvmix_r8
++    select case (CVmix_kpp_params%interp_type)
++      case (CVMIX_KPP_INTERP_LINEAR)
++        ! Match values at levels kt and kt+1
++        print*, "Linear interpolation"
++        c = (Ri_bulk(kt+1)-Ri_bulk(kt))/(depth(kt+1)-depth(kt))
++        d = Ri_bulk(kt)-c*depth(kt)
++      case (CVMIX_KPP_INTERP_QUAD)
++        ! Match slope and value at level kt, value at level kt+1
++        print*, "Quadratic interpolation"
++        ! [ x1^2 x1 1 ][ b ]   [    y1 ]
++        ! [ x0^2 x0 1 ][ c ] = [    y0 ]
++        ! [  2x0  1 0 ][ d ]   [ slope ]
++        !      ^^^
++        !       M
++        det = -((depth(kt+1)-depth(kt))**2)
++        allocate(Minv(3,3))
++        allocate(rhs(3))
++        rhs(1) = Ri_bulk(kt+1)
++        rhs(2) = Ri_bulk(kt)
++        if (kt.gt.1) then
++          rhs(3) = (Ri_bulk(kt)-Ri_bulk(kt-1))/(depth(kt)-depth(kt-1))
++        else
++          rhs(3) = 0.0_cvmix_r8
++        end if
++
++        Minv(1,1) = -real(1, cvmix_r8)/det
++        Minv(1,2) = real(1, cvmix_r8)/det
++        Minv(1,3) = -real(1, cvmix_r8)/(depth(kt+1)-depth(kt))
++        Minv(2,1) = real(2, cvmix_r8)*depth(kt)/det
++        Minv(2,2) = -real(2, cvmix_r8)*depth(kt)/det
++        Minv(2,3) = (depth(kt+1)+depth(kt))/(depth(kt+1)-depth(kt))
++        Minv(3,1) = -(depth(kt)**2)/det
++        Minv(3,2) = depth(kt+1)*(real(2, cvmix_r8)*depth(kt)-depth(kt+1))/det
++        Minv(3,3) = -depth(kt+1)*depth(kt)/(depth(kt+1)-depth(kt))
++
++        do k=1,3
++          b = b+Minv(1,k)*rhs(k)
++          c = c+Minv(2,k)*rhs(k)
++          d = d+Minv(3,k)*rhs(k)
++        end do
++        deallocate(rhs)
++        deallocate(Minv)
++      case (CVMIX_KPP_INTERP_CUBE_SPLINE)
++        ! [ x1^3 x1^2 x1 1 ][ a ]   [     y1 ]
++        ! [ x0^3 x0^2 x0 1 ][ b ] = [     y0 ]
++        ! [  3x0  2x0  1 0 ][ c ]   [ slope0 ]
++        ! [  3x1  2x1  1 0 ][ d ]   [ slope1 ]
++        !      ^^^
++        !       M
++        det = -((depth(kt+1)-depth(kt))**3)
++        allocate(Minv(4,4))
++        allocate(rhs(4))
++        rhs(1) = Ri_bulk(kt+1)
++        rhs(2) = Ri_bulk(kt)
++        if (kt.gt.1) then
++          rhs(3) = (Ri_bulk(kt)-Ri_bulk(kt-1))/(depth(kt)-depth(kt-1))
++        else
++          rhs(3) = 0.0_cvmix_r8
++        end if
++        rhs(4) = (Ri_bulk(kt+1)-Ri_bulk(kt))/(depth(kt+1)-depth(kt))
++
++        Minv(1,1) = real(2, cvmix_r8)/det
++        Minv(1,2) = -real(2, cvmix_r8)/det
++        Minv(1,3) = (depth(kt)-depth(kt+1))/det
++        Minv(1,4) = (depth(kt)-depth(kt+1))/det
++        Minv(2,1) = -real(3, cvmix_r8)*(depth(kt+1)+depth(kt))/det
++        Minv(2,2) = real(3, cvmix_r8)*(depth(kt+1)+depth(kt))/det
++        Minv(2,3) = (depth(kt+1)-depth(kt))*(real(2, cvmix_r8)*depth(kt+1)+depth(kt))/det
++        Minv(2,4) = (depth(kt+1)-depth(kt))*(real(2, cvmix_r8)*depth(kt)+depth(kt+1))/det
++        Minv(3,1) = real(6, cvmix_r8)*depth(kt+1)*depth(kt)/det
++        Minv(3,2) = -real(6, cvmix_r8)*depth(kt+1)*depth(kt)/det
++        Minv(3,3) = -depth(kt+1)*(depth(kt+1)-depth(kt))*(real(2, cvmix_r8)*depth(kt)+depth(kt+1))/det
++        Minv(3,4) = -depth(kt)*(depth(kt+1)-depth(kt))*(real(2, cvmix_r8)*depth(kt+1)+depth(kt))/det
++        Minv(4,1) = -(depth(kt)**2)*(real(3, cvmix_r8)*depth(kt+1)-depth(kt))/det
++        Minv(4,2) = -(depth(kt+1)**2)*(-real(3, cvmix_r8)*depth(kt)+depth(kt+1))/det
++        Minv(4,3) = depth(kt)*(depth(kt+1)**2)*(depth(kt+1)-depth(kt))/det
++        Minv(4,4) = depth(kt+1)*(depth(kt)**2)*(depth(kt+1)-depth(kt))/det
++
++        do k=1,4
++          a = a+Minv(1,k)*rhs(k)
++          b = b+Minv(2,k)*rhs(k)
++          c = c+Minv(3,k)*rhs(k)
++          d = d+Minv(4,k)*rhs(k)
++        end do
++        deallocate(rhs)
++        deallocate(Minv)
++        ! Match slopes and values at levels kt and kt+1
++        print*, "Cubic spline interpolation"
++    end select
++    print*, kt, nlev
++    OBL_depth = cubic_root_find((/a,b,c,d-CVmix_kpp_params%ri_crit/), &
++                                0.5_cvmix_r8*(depth(kt)+depth(kt+1)))
++
++!EOC
++
++  end subroutine cvmix_kpp_compute_OBL_depth_low
++
++!BOP
++
++! !IROUTINE: cvmix_kpp_compute_OBL_depth_wrap
++! !INTERFACE:
++
++  subroutine cvmix_kpp_compute_OBL_depth_wrap(CVmix_kpp_params, CVmix_vars)
++
++! !DESCRIPTION:
++!  Computes the depth of the ocean boundary layer (OBL) for a given column
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    type(cvmix_kpp_params_type), intent(in) :: CVmix_kpp_params
++
++! !OUTPUT PARAMETERS:
++    type(cvmix_data_type), intent(inout) :: CVmix_vars
++
++!EOP
++!BOC
++
++    ! Local variables
++    real(cvmix_r8) :: lcl_obl_depth
++
++    call cvmix_kpp_compute_OBL_depth(CVmix_kpp_params, CVmix_vars%Rib, &
++                                     CVmix_vars%zt, lcl_obl_depth)
++    call cvmix_put(CVmix_vars, 'OBL_depth', lcl_obl_depth)
++
++!EOC
++
++  end subroutine cvmix_kpp_compute_OBL_depth_wrap
++
++  function cubic_root_find(coeffs, x0)
++
++    real(cvmix_r8), dimension(4), intent(in) :: coeffs
++    real(cvmix_r8),               intent(in) :: x0
++
++    real(cvmix_r8) :: cubic_root_find
++    real(cvmix_r8) :: fun_val, root, slope
++    integer :: it_cnt
++
++    root = x0
++    fun_val = coeffs(1)*(root**3)+coeffs(2)*(root**2)+coeffs(3)*root+coeffs(4)
++    do it_cnt = 1, CVMIX_KPP_MAX_NEWTON_ITERS
++      if (abs(fun_val).lt.CVMIX_KPP_NEWTON_TOL) &
++        exit
++      slope = 3.0_cvmix_r8*coeffs(1)*(root**2)+2.0_cvmix_r8*coeffs(2)*root+coeffs(3)
++      root = root - fun_val/slope
++      fun_val = coeffs(1)*(root**3)+coeffs(2)*(root**2)+coeffs(3)*root+coeffs(4)
++    end do
++    cubic_root_find = root
++
++  end function cubic_root_find
++      
++end module cvmix_kpp
+--- /dev/null
++++ mpas-ocean-model-1.0/src/core_ocean/cvmix/cvmix_convection.F90
+@@ -0,0 +1,253 @@
++module cvmix_convection
++
++!BOP
++!\newpage
++! !MODULE: cvmix_convection
++!
++! !DESCRIPTION:
++!  This module contains routines to initialize the derived types needed for
++!  specifying mixing coefficients to parameterize vertical convective mixing,
++!  and to set the viscosity and diffusivity in gravitationally unstable portions
++!  of the water column.
++!\\
++!\\
++
++! !REVISION HISTORY:
++!  SVN:$Id: cvmix_convection.F90 182 2013-07-11 04:49:41Z mike.levy.work@gmail.com $
++!  SVN:$URL: http://cvmix.googlecode.com/svn/trunk/src/shared/cvmix_convection.F90 $
++
++! !USES:
++   use cvmix_kinds_and_types, only : cvmix_r8,               &
++                                     cvmix_data_type
++!EOP
++
++  implicit none
++  private
++  save
++
++!BOP
++
++! !PUBLIC MEMBER FUNCTIONS:
++
++   public :: cvmix_init_conv
++   public :: cvmix_coeffs_conv
++   public :: cvmix_put_conv
++   public :: cvmix_get_conv_real
++
++   interface cvmix_put_conv
++     module procedure cvmix_put_conv_real
++   end interface cvmix_put_conv
++
++! !PUBLIC TYPES:
++
++  ! cvmix_conv_params_type contains the necessary parameters for convective
++  ! mixing.
++  type, public :: cvmix_conv_params_type
++    private
++    real(cvmix_r8) :: convect_diff
++    real(cvmix_r8) :: convect_visc
++  end type cvmix_conv_params_type
++
++!EOP
++
++  type(cvmix_conv_params_type), target :: CVmix_conv_params_saved
++
++contains
++
++!BOP
++
++! !IROUTINE: cvmix_init_conv
++! !INTERFACE:
++
++  subroutine cvmix_init_conv(convect_diff, convect_visc, CVmix_conv_params_user)
++
++! !DESCRIPTION:
++!  Initialization routine for specifying convective mixing coefficients.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !OUTPUT PARAMETERS:
++    type (cvmix_conv_params_type), optional, target, intent(out) :: CVmix_conv_params_user
++
++! !INPUT PARAMETERS:
++    real(cvmix_r8), intent(in) :: &
++      convect_diff,      &! diffusivity to parameterize convection
++      convect_visc        ! viscosity to parameterize convection
++!EOP
++!BOC
++
++    type (cvmix_conv_params_type), pointer :: CVmix_conv_params_out
++
++    if (present(CVmix_conv_params_user)) then
++      CVmix_conv_params_out => CVmix_conv_params_user
++    else
++      CVmix_conv_params_out => CVmix_conv_params_saved
++    end if
++
++    ! Set convect_diff and convect_visc in conv_params_type
++    call cvmix_put_conv(CVmix_conv_params_out, "convect_diff", convect_diff)
++    call cvmix_put_conv(CVmix_conv_params_out, "convect_visc", convect_visc)
++
++!EOC
++
++  end subroutine cvmix_init_conv
++
++!BOP
++
++! !IROUTINE: cvmix_coeffs_conv
++! !INTERFACE:
++
++  subroutine cvmix_coeffs_conv(CVmix_vars, CVmix_conv_params_user)
++
++! !DESCRIPTION:
++!  Computes vertical diffusion coefficients for convective mixing.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++
++    type (cvmix_conv_params_type), optional, target, intent(in)  :: CVmix_conv_params_user
++
++! !INPUT/OUTPUT PARAMETERS:
++    type (cvmix_data_type), intent(inout) :: CVmix_vars
++!EOP
++!BOC
++
++!-----------------------------------------------------------------------
++!
++!  local variables
++!
++!-----------------------------------------------------------------------
++
++    real(cvmix_r8) :: vvconv
++    integer        :: kw  ! vertical level index 
++
++    type (cvmix_conv_params_type), pointer :: CVmix_conv_params_in
++
++    if (present(CVmix_conv_params_user)) then
++      CVmix_conv_params_in => CVmix_conv_params_user
++    else
++      CVmix_conv_params_in => CVmix_conv_params_saved
++    end if
++
++!-----------------------------------------------------------------------
++!
++!  enhance the vertical mixing coefficients if gravitationally unstable
++!
++!-----------------------------------------------------------------------
++
++    do kw=1,CVmix_vars%nlev-1
++      if (CVmix_conv_params_in%convect_visc.ne.0_cvmix_r8) then
++         vvconv = cvmix_get_conv_real('convect_visc', CVmix_conv_params_in)
++      else
++        ! convection only affects tracers
++        vvconv = CVmix_vars%visc_iface(kw)
++      end if
++
++      if (CVmix_vars%dens(kw).gt.CVmix_vars%dens_lwr(kw)) then
++        CVmix_vars%diff_iface(kw+1,1) = cvmix_get_conv_real('convect_diff',   &
++                                        CVmix_conv_params_in)
++        CVmix_vars%visc_iface(kw+1)   = vvconv
++      end if
++    end do
++
++!EOC
++
++  end subroutine cvmix_coeffs_conv
++
++!BOP
++
++! !IROUTINE: cvmix_put_conv_real
++! !INTERFACE:
++
++  subroutine cvmix_put_conv_real(CVmix_conv_params_put, varname, val)
++
++! !DESCRIPTION:
++!  Write a real value into a cvmix\_conv\_params\_type variable.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    character(len=*), intent(in) :: varname
++    real(cvmix_r8),   intent(in) :: val
++
++! !OUTPUT PARAMETERS:
++    type(cvmix_conv_params_type), intent(inout) :: CVmix_conv_params_put
++!EOP
++!BOC
++
++    select case (trim(varname))
++      case ('convect_diff')
++        CVmix_conv_params_put%convect_diff = val
++      case ('convect_visc')
++        CVmix_conv_params_put%convect_visc = val
++      case DEFAULT
++        print*, "ERROR: ", trim(varname), " not a valid choice!"
++        stop 1
++      
++    end select
++
++!EOC
++
++  end subroutine cvmix_put_conv_real
++
++!BOP
++
++! !IROUTINE: cvmix_get_conv_real
++! !INTERFACE:
++
++  function cvmix_get_conv_real(varname, CVmix_conv_params_user)
++
++! !DESCRIPTION:
++!  Read the real value of a cvmix\_conv\_params\_type variable.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    character(len=*),             intent(in) :: varname
++    type(cvmix_conv_params_type), optional, target, intent(in) ::             &
++                                           CVmix_conv_params_user
++
++! !OUTPUT PARAMETERS:
++    real(cvmix_r8) :: cvmix_get_conv_real
++!EOP
++!BOC
++
++    type(cvmix_conv_params_type), pointer :: CVmix_conv_params_get
++
++    if (present(CVmix_conv_params_user)) then
++      CVmix_conv_params_get => CVmix_conv_params_user
++    else
++      CVmix_conv_params_get => CVmix_conv_params_saved
++    end if
++
++    cvmix_get_conv_real = 0.0_cvmix_r8
++    select case (trim(varname))
++      case ('convect_diff')
++        cvmix_get_conv_real = CVmix_conv_params_get%convect_diff
++      case ('convect_visc')
++        cvmix_get_conv_real = CVmix_conv_params_get%convect_visc
++      case DEFAULT
++        print*, "ERROR: ", trim(varname), " not a valid choice!"
++        stop 1
++      
++    end select
++
++!EOC
++
++  end function cvmix_get_conv_real
++
++end module cvmix_convection
++
+--- /dev/null
++++ mpas-ocean-model-1.0/src/core_ocean/cvmix/cvmix_kinds_and_types.F90
+@@ -0,0 +1,96 @@
++module cvmix_kinds_and_types
++
++!BOP
++!\newpage
++! !MODULE:  cvmix_kinds_and_types
++!
++! !DESCRIPTION:
++!  This module contains the declarations for all required vertical mixing
++!  data types. It also contains several global parameters used by the cvmix
++!  package, such as kind numbers and string lengths.
++!  \\
++!  \\
++
++! !REVISION HISTORY:
++!  SVN:$Id: cvmix_kinds_and_types.F90 176 2013-07-06 20:24:27Z mike.levy.work@gmail.com $
++!  SVN:$URL: http://cvmix.googlecode.com/svn/trunk/src/shared/cvmix_kinds_and_types.F90 $
++
++! !USES:
++!  uses no other modules
++!EOP
++
++  implicit none
++  private
++  save
++
++!BOP
++
++! !DEFINED PARAMETERS:
++
++  ! Kind Types:
++  ! The cvmix package uses double precision for floating point computations.
++  integer, parameter, public :: cvmix_r8     = selected_real_kind(15, 307), &
++                                cvmix_strlen = 256
++
++  ! Global parameters:
++  ! The constant 1 is used repeatedly in PP and double-diff mixing.
++  ! The value for pi is needed for Bryan-Lewis mixing.
++  real(cvmix_r8), parameter, public :: one = 1.0_cvmix_r8
++  real(cvmix_r8), parameter, public :: cvmix_PI = &
++                                       3.14159265358979323846_cvmix_r8
++
++! !PUBLIC TYPES:
++
++  ! cvmix_data_type contains variables for time-dependent and column-specific
++  ! mixing. Time-independent physical parameters should be stored in
++  ! cvmix_global_params_type and *-mixing specific parameters should be
++  ! stored in cvmix_*_params_type (found in the cvmix_* module).
++  type, public :: cvmix_data_type
++      integer        :: nlev = -1  ! Number of levels in column
++                                   ! Setting default to -1 might be F95...
++      real(cvmix_r8) :: ocn_depth, & ! depth (positive down)
++                        OBL_depth, & ! Ocean Boundary Layer depth (positive up)
++                        surf_hgt,  & ! sea surface height (positive up)
++                        lat,       & ! latitude of column (degrees north)
++                        lon          ! longitude of column (degrees east)
++
++      ! Values on interfaces
++      ! nlev+1, 2
++      real(cvmix_r8), dimension(:,:), pointer :: diff_iface => NULL()
++      ! nlev+1
++      real(cvmix_r8), dimension(:),   pointer :: visc_iface => NULL()
++      real(cvmix_r8), dimension(:),   pointer :: zw_iface   => NULL()
++      real(cvmix_r8), dimension(:),   pointer :: dzw_iface  => NULL()
++      real(cvmix_r8), dimension(:),   pointer :: Ri_iface   => NULL()
++      ! For tidal mixing, we need the squared buoyancy frequency
++      real(cvmix_r8), dimension(:),   pointer :: buoy_iface => NULL()
++
++      ! Values at tracer points
++      ! nlev
++      real(cvmix_r8), dimension(:),   pointer :: dens     => NULL()
++      real(cvmix_r8), dimension(:),   pointer :: dens_lwr => NULL()
++      real(cvmix_r8), dimension(:),   pointer :: zt       => NULL()
++      real(cvmix_r8), dimension(:),   pointer :: dzt      => NULL()
++      real(cvmix_r8), dimension(:),   pointer :: Rib      => NULL()
++      ! For double diffusion mixing, we need to calculate the stratification
++      ! parameter R_rho. Since the denominator of this ratio may be zero,
++      ! we store the numerator and denominator separately and make sure the
++      ! denominator is non-zero before performing the division.
++      real(cvmix_r8), dimension(:),   pointer :: strat_param_num   => NULL()
++      real(cvmix_r8), dimension(:),   pointer :: strat_param_denom => NULL()
++  end type cvmix_data_type
++
++  ! cvmix_global_params_type contains global parameters used by multiple
++  ! mixing methods.
++  type, public :: cvmix_global_params_type
++      integer                        :: max_nlev  ! maximum number of levels
++      real(cvmix_r8)                 :: prandtl   ! Prandtl number
++      ! For densities, user must keep track of units (kg/m^3 vs g/cm^3)
++      real(cvmix_r8)                 :: fw_rho    ! fresh water density
++      real(cvmix_r8)                 :: sw_rho    ! salt water density
++  end type cvmix_global_params_type
++
++!EOP
++
++end module cvmix_kinds_and_types
++
+--- /dev/null
++++ mpas-ocean-model-1.0/src/core_ocean/cvmix/Makefile
+@@ -0,0 +1,132 @@
++.SUFFIXES: .F90 .o
++extension = .F90
++
++# Need CVMix root directory
++# If using old version of make, pass in CVMIX_ROOT
++ifeq ($(wildcard $(MAKEFILE_LIST)),)
++  CVMIX_ROOT := ../..
++else
++  ThisMakefile=$(word $(words $(MAKEFILE_LIST)),$(MAKEFILE_LIST))
++  ifeq (/,$(findstring /,$(ThisMakefile)))
++    ThisDir=$(shell x=$(ThisMakefile) && echo $${x%/*})/
++  endif
++  CVMIX_ROOT := $(realpath $(ThisDir)../..)
++endif
++
++SETUP_FILE = $(CVMIX_ROOT)/bld/cvmix_setup
++ENV_FILE = $(CVMIX_ROOT)/bld/.CVMix_env
++# Directories used in Makefile
++# Check to see if this is standalone CVMix or not (look for $(SETUP_FILE))
++ifneq ($(wildcard $(SETUP_FILE)),)
++  SRC_DIR = $(CVMIX_ROOT)/src/shared
++  BLD_DIR = $(CVMIX_ROOT)/bld
++  FLAG_FILE = $(BLD_DIR)/CompileFlags.mak
++  OBJ_DIR = $(BLD_DIR)/obj
++  LIB_DIR = $(CVMIX_ROOT)/lib
++  INC_DIR = $(CVMIX_ROOT)/include
++  ifeq ($(wildcard $(ENV_FILE)),)
++    NEED_ENV_FILE = TRUE
++  else
++    # Read in Compiler information
++    include $(ENV_FILE)
++    NEED_ENV_FILE = FALSE
++  endif
++  # Read in FCFLAGS
++  include $(FLAG_FILE)
++else
++  SRC_DIR = .
++  OBJ_DIR = .
++  LIB_DIR = .
++  INC_DIR = .
++  FC = NONE
++  NEED_ENV_FILE = FALSE
++endif
++
++# Dependency Generation
++MAKE_DEP = $(SRC_DIR)/makedep.py
++DEP_FILE = $(OBJ_DIR)/shared_deps.d
++
++ifeq ($(FC),NONE)
++  NOFC = TRUE
++endif
++
++MODULES = cvmix_background.F90 \
++          cvmix_convection.F90 \
++          cvmix_ddiff.F90 \
++          cvmix_kpp.F90 \
++          cvmix_put_get.F90 \
++          cvmix_shear.F90 \
++          cvmix_tidal.F90
++
++# Some compilers produce ALL_UPPER_CASE.mod files
++ifeq ($(UCASE),TRUE)
++  MODS_TMP = CVMIX_KINDS_AND_TYPES.F90 \
++             $(shell echo $(MODULES) | tr '[a-z]' '[A-Z]')
++else
++  MODS_TMP = cvmix_kinds_and_types.F90 \
++             $(MODULES)
++endif
++ifneq ($(OBJ_DIR),$(INC_DIR))
++  INCS = $(addprefix $(INC_DIR)/,${MODS_TMP:.F90=.mod})
++endif
++MODS = $(addprefix $(OBJ_DIR)/,${MODS_TMP:.F90=.mod}) \
++       $(INCS)
++OBJS = $(addprefix $(OBJ_DIR)/,${MODULES:.F90=.o})
++KINDS_OBJ = $(OBJ_DIR)/cvmix_kinds_and_types.o
++ifeq ($(FC),$(filter $(FC),pgf90 ftn))
++  OBJS += $(KINDS_OBJ)
++endif
++
++ifeq ($(USE_DEPS),TRUE)
++  include $(DEP_FILE)
++endif
++
++### TARGETS ###
++
++all: lib
++
++# Create all object and module files
++# Note that .mod files need to be copied to INC_DIR if OBJ_DIR != INC_DIR
++
++$(OBJ_DIR)/%.o: $(SRC_DIR)/%.F90
++	$(FC) $(FCFLAGS) -c $< -o $@
++
++$(INC_DIR)/%.mod: $(OBJ_DIR)/%.mod
++ifneq ($(INC_DIR),$(OBJ_DIR))
++	cp $< $@
++endif
++
++### Combine into library
++$(LIB_DIR)/libcvmix.a: $(KINDS_OBJ) $(OBJS)
++	ar -ru $(LIB_DIR)/libcvmix.a $(OBJS)
++
++$(DEP_FILE): $(MAKE_DEP) $(SRC_DIR)/*.F90
++	$(MAKE_DEP) $(DEP_FILE) $(OBJ_DIR) $(SRC_DIR)
++	@echo "Generated dependencies!"
++
++.PHONY: depends recurse check clean
++
++# Shorthand for making dependency file
++depends: $(DEP_FILE)
++
++# Shorthand for making the library (and all .mod files)
++lib: check depends
++ifeq ($(NEED_ENV_FILE),FALSE)
++	$(MAKE) -e -f $(SRC_DIR)/Makefile $(LIB_DIR)/libcvmix.a $(INCS) USE_DEPS=TRUE
++endif
++
++# If this is running in the full CVMix directory, look for $(ENV_FILE) and run
++# cvmix_setup if it doesn't exist. If this is not running in the full CVMix
++# directory (e.g. the shared directory was brought in to an ocean model), make
++# sure a Fortran compiler was specified.
++check:
++	@$(if $(NOFC), echo "ERROR: you must specify FC (and it is recommended that \
++     you specify FCFLAGS"; echo "as well)."; exit 1)
++ifeq ($(NEED_ENV_FILE),TRUE)
++	$(SETUP_FILE) $(ENV_FILE); $(MAKE) -e -f $(SRC_DIR)/Makefile
++endif
++
++# Remove library, object files, module files, and dependency file
++clean:
++	/bin/rm -f $(LIB_DIR)/libcvmix.a $(OBJS) $(KINDS_OBJ) $(MODS) $(DEP_FILE)
++
+--- /dev/null
++++ mpas-ocean-model-1.0/src/core_ocean/cvmix/cvmix_ddiff.F90
+@@ -0,0 +1,392 @@
++module cvmix_ddiff
++
++!BOP
++!\newpage
++! !MODULE: cvmix_ddiff
++!
++! !DESCRIPTION:
++!  This module contains routines to initialize the derived types needed for
++!  double diffusion mixing and to set the diffusivity coefficient
++!  accordingly.
++!\\
++!\\
++!
++! !REVISION HISTORY:
++!  SVN:$Id: cvmix_ddiff.F90 155 2013-06-07 19:08:49Z mike.levy.work@gmail.com $
++!  SVN:$URL: http://cvmix.googlecode.com/svn/trunk/src/shared/cvmix_ddiff.F90 $
++
++! !USES:
++
++  use cvmix_kinds_and_types, only : one,                     &
++                                    cvmix_r8,                &
++                                    cvmix_data_type
++!EOP
++
++  implicit none
++  private
++  save
++
++!BOP
++
++! !PUBLIC MEMBER FUNCTIONS:
++
++  public :: cvmix_init_ddiff
++  public :: cvmix_coeffs_ddiff
++  public :: cvmix_put_ddiff
++  public :: cvmix_get_ddiff_real
++
++  interface cvmix_put_ddiff
++    module procedure cvmix_put_ddiff_real
++  end interface cvmix_put_ddiff
++
++! !PUBLIC TYPES:
++
++  ! cvmix_ddiff_params_type contains the necessary parameters for double
++  ! diffusion mixing
++  type, public :: cvmix_ddiff_params_type
++    private
++    real(cvmix_r8) :: strat_param_max
++    real(cvmix_r8) :: kappa_ddiff_t
++    real(cvmix_r8) :: kappa_ddiff_s
++    real(cvmix_r8) :: ddiff_exp1
++    real(cvmix_r8) :: ddiff_exp2
++    real(cvmix_r8) :: kappa_ddiff_param1
++    real(cvmix_r8) :: kappa_ddiff_param2
++    real(cvmix_r8) :: kappa_ddiff_param3
++    real(cvmix_r8) :: mol_diff
++  end type cvmix_ddiff_params_type
++
++!EOP
++
++ contains
++
++!BOP
++
++! !IROUTINE: cvmix_init_ddiff
++! !INTERFACE:
++
++  subroutine cvmix_init_ddiff(CVmix_ddiff_params, units, strat_param_max, &
++                              kappa_ddiff_t, kappa_ddiff_s, ddiff_exp1,   &
++                              ddiff_exp2, mol_diff, kappa_ddiff_param1,   &
++                              kappa_ddiff_param2, kappa_ddiff_param3)
++
++! !DESCRIPTION:
++!  Initialization routine for double diffusion mixing. This mixing technique
++!  looks for two unstable cases in a column - salty water over fresher
++!  water and colder water over warmer water - and computes different
++!  diffusivity coefficients in each of these two locations. The parameter
++!  \begin{eqnarray*}
++!  R_\rho = \frac{\alpha (\partial \Theta / \partial z)}
++!                {\beta (\partial S / \partial z)}
++!  \end{eqnarray*}
++!  to determine as a stratification parameter. If $(\partial S / \partial z)$
++!  is positive and $1 < R_\rho < R_\rho^0$ then salt water sits on top
++!  of fresh water and the diffusivity is given by
++!  \begin{eqnarray*}
++!  \kappa = \kappa^0 \left[ 1 - \left(\frac{R_\rho - 1}{R_\rho^0 - 1} \right)^{p_1}\right]^{p_2}
++!  \end{eqnarray*}
++!  The user must specify which set of units to use, either \verb|'mks'| or \verb|'cgs'|.
++!  By default, $R_\rho^0 = 2.55$, but that can be changed by setting 
++!  \verb|strat_param_max| in the code. Similarly, by default $p_1 = 1$ 
++! (\verb|ddiff_exp1|), $p_2 = 3$ (\verb|ddiff_exp2|), and
++!  \begin{eqnarray*}
++!  \kappa^0 = \left\{ \begin{array}{r l}
++!             7 \cdot 10^{-5}\ \textrm{m}^2\textrm{/s} & \textrm{for temperature}
++!             \ (\verb|kappa_ddiff_t|\ \textrm{in this routine})\\
++!             10^{-4}\ \textrm{m}^2\textrm{/s} & \textrm{for salinity and other tracers}
++!             \ (\verb|kappa_ddiff_s|\ \textrm{in this routine}).
++!                     \end{array} \right.
++!  \end{eqnarray*}
++!  On the other hand, if $(\partial \Theta / \partial z)$ is negative and
++!  $0 < R_\rho < 1$ then cold water sits on warm warm water and the
++!  diffusivity for temperature is given by
++!  \begin{eqnarray*}
++!  \kappa = \nu_\textrm{molecular} \cdot 0.909\exp\left\{ 4.6\exp\left[
++!           -0.54\left( \frac{1}{R_\rho} - 1 \right) \right] \right\}
++!  \end{eqnarray*}
++!  where $\nu_\textrm{molecular}$ Is the molecular viscosity of water. By default it
++!  is set to $1.5 \cdot 10^{-6}\ \textrm{m}^2\textrm{/s}$, but it can be changed
++!  through \verb|mol_diff| in the code. Similarly, 0.909, 4.6, and -0.54 are the
++!  default values of \verb|kappa_ddiff_param1|, \verb|kappa_ddiff_param2|, and
++!  \verb|kappa_ddiff_param3|, respectively.\\
++!\\
++!  For salinity and other tracers, $\kappa$ above is multiplied by the factor
++!  \begin{eqnarray*}
++!  \textrm{factor} = \left\{ \begin{array}{c l}
++!                    0.15R_\rho & R_\rho < 0.5\\
++!                    1.85R_\rho - 0.85 & 0.5 \le R_\rho < 1\\
++!                     \end{array} \right.
++!  \end{eqnarray*}
++!  $\kappa$ is stored in \verb|CVmix_vars%diff_iface(:,1)|, while the modified value
++!  for non-temperature tracers is stored in \verb|CVmix_vars%diff_iface(:,2)|.\\
++!\\
++! !USES:
++!  Only those used by entire module.
++
++! !INPUT PARAMETERS:
++    character(len=*),           intent(in) :: units ! "mks" or "cgs"
++    real(cvmix_r8),   optional, intent(in) :: strat_param_max, &
++                                              kappa_ddiff_t, &
++                                              kappa_ddiff_s, &
++                                              ddiff_exp1, &
++                                              ddiff_exp2, &
++                                              mol_diff, &
++                                              kappa_ddiff_param1, &
++                                              kappa_ddiff_param2, &
++                                              kappa_ddiff_param3
++
++! !OUTPUT PARAMETERS:
++    type(cvmix_ddiff_params_type), intent(inout) :: CVmix_ddiff_params
++!EOP
++!BOC
++
++    ! Unitless parameters
++    if (present(strat_param_max)) then
++      call cvmix_put_ddiff(CVmix_ddiff_params, "strat_param_max", strat_param_max)
++    else
++      call cvmix_put_ddiff(CVmix_ddiff_params, "strat_param_max", 2.55_cvmix_r8)
++    end if
++    if (present(ddiff_exp1)) then
++      call cvmix_put_ddiff(CVmix_ddiff_params, "ddiff_exp1", ddiff_exp1)
++    else
++      call cvmix_put_ddiff(CVmix_ddiff_params, "ddiff_exp1", 1.0_cvmix_r8)
++    end if
++    if (present(ddiff_exp2)) then
++      call cvmix_put_ddiff(CVmix_ddiff_params, "ddiff_exp2", ddiff_exp2)
++    else
++      call cvmix_put_ddiff(CVmix_ddiff_params, "ddiff_exp2", 3.0_cvmix_r8)
++    end if
++    if (present(kappa_ddiff_param1)) then
++      call cvmix_put_ddiff(CVmix_ddiff_params, "kappa_ddiff_param1", kappa_ddiff_param1)
++    else
++      call cvmix_put_ddiff(CVmix_ddiff_params, "kappa_ddiff_param1", 0.909_cvmix_r8)
++    end if
++    if (present(kappa_ddiff_param2)) then
++      call cvmix_put_ddiff(CVmix_ddiff_params, "kappa_ddiff_param2", kappa_ddiff_param2)
++    else
++      call cvmix_put_ddiff(CVmix_ddiff_params, "kappa_ddiff_param2", 4.6_cvmix_r8)
++    end if
++    if (present(kappa_ddiff_param3)) then
++      call cvmix_put_ddiff(CVmix_ddiff_params, "kappa_ddiff_param3", kappa_ddiff_param3)
++    else
++      call cvmix_put_ddiff(CVmix_ddiff_params, "kappa_ddiff_param3", -0.54_cvmix_r8)
++    end if
++
++    ! Parameters with units
++    if (present(kappa_ddiff_t)) then
++      call cvmix_put_ddiff(CVmix_ddiff_params, "kappa_ddiff_t", kappa_ddiff_t)
++    end if
++    if (present(kappa_ddiff_s)) then
++      call cvmix_put_ddiff(CVmix_ddiff_params, "kappa_ddiff_s", kappa_ddiff_s)
++    end if
++    if (present(mol_diff)) then
++      call cvmix_put_ddiff(CVmix_ddiff_params, "mol_diff", mol_diff)
++    end if
++
++    select case (trim(units))
++      case ('mks')
++        if (.not.present(kappa_ddiff_t)) then
++          call cvmix_put_ddiff(CVmix_ddiff_params, "kappa_ddiff_t", 7e-5_cvmix_r8)
++        end if
++        if (.not.present(kappa_ddiff_s)) then
++          call cvmix_put_ddiff(CVmix_ddiff_params, "kappa_ddiff_s", 1e-4_cvmix_r8)
++        end if
++        if (.not.present(mol_diff)) then
++          call cvmix_put_ddiff(CVmix_ddiff_params, "mol_diff", 1.5e-6_cvmix_r8)
++        end if
++      case ('cgs')
++        if (.not.present(kappa_ddiff_t)) then
++          call cvmix_put_ddiff(CVmix_ddiff_params, "kappa_ddiff_t", 7e-1_cvmix_r8)
++        end if
++        if (.not.present(kappa_ddiff_s)) then
++          call cvmix_put_ddiff(CVmix_ddiff_params, "kappa_ddiff_s", 1.0_cvmix_r8)
++        end if
++        if (.not.present(mol_diff)) then
++          call cvmix_put_ddiff(CVmix_ddiff_params, "mol_diff", 1.5e-2_cvmix_r8)
++        end if
++
++      case DEFAULT
++        print*, "ERROR: ", trim(units), " is not a valid choice for double ", &
++                "diffusion mixing. Only 'mks' and 'cgs' are supported."
++        stop 1
++
++    end select
++
++!EOC
++
++  end subroutine cvmix_init_ddiff
++
++!BOP
++
++! !IROUTINE: cvmix_coeffs_ddiff
++! !INTERFACE:
++
++  subroutine cvmix_coeffs_ddiff(CVmix_vars, CVmix_ddiff_params)
++
++! !DESCRIPTION:
++!  Computes vertical diffusion coefficients for the double diffusion mixing
++!  parameterizatiion.
++!\\
++!\\
++!
++! !USES:
++!  only those used by entire module.
++
++! !INPUT PARAMETERS:
++    type(cvmix_ddiff_params_type), intent(in) :: CVmix_ddiff_params
++
++! !INPUT/OUTPUT PARAMETERS:
++    type(cvmix_data_type), intent(inout) :: CVmix_vars
++
++! !LOCAL VARIABLES:
++    integer :: k ! column index
++    real(cvmix_r8) :: ddiff, Rrho
++
++!EOP
++!BOC
++
++    ! Determine coefficients based on units requested
++    CVmix_vars%diff_iface = 0_cvmix_r8
++    do k = 1, CVmix_vars%nlev
++      if ((CVmix_vars%strat_param_num(k).gt.CVmix_vars%strat_param_denom(k)).and.&
++          (CVmix_vars%strat_param_denom(k).gt.0)) then
++        ! Rrho > 1 and dS/dz < 0 => Salt fingering
++        Rrho = CVmix_vars%strat_param_num(k) / CVmix_vars%strat_param_denom(k)
++        if (Rrho.lt.CVmix_ddiff_params%strat_param_max) then
++          ddiff = (one-((Rrho-one)/(CVmix_ddiff_params%strat_param_max-one))** &
++                  CVmix_ddiff_params%ddiff_exp1)**CVmix_ddiff_params%ddiff_exp2
++          CVmix_vars%diff_iface(k,1) = CVmix_ddiff_params%kappa_ddiff_t*ddiff
++          CVmix_vars%diff_iface(k,2) = CVmix_ddiff_params%kappa_ddiff_s*ddiff
++        end if
++      end if
++      if ((CVmix_vars%strat_param_num(k).gt.CVmix_vars%strat_param_denom(k)).and.&
++          (CVmix_vars%strat_param_num(k).lt.0)) then
++        ! Rrho < 1 and dT/dz > 0 => Diffusive convection
++        Rrho = CVmix_vars%strat_param_num(k) / CVmix_vars%strat_param_denom(k)
++        ddiff = CVmix_ddiff_params%mol_diff*CVmix_ddiff_params%kappa_ddiff_param1*&
++                exp(CVmix_ddiff_params%kappa_ddiff_param2*exp(&
++                CVmix_ddiff_params%kappa_ddiff_param3*(one/Rrho-one)))
++        CVmix_vars%diff_iface(k,1) = ddiff
++        if (Rrho.lt.0.5_cvmix_r8) then
++          CVmix_vars%diff_iface(k,2) = 0.15_cvmix_r8*Rrho*ddiff
++        else
++          CVmix_vars%diff_iface(k,2) = (1.85_cvmix_r8*Rrho-0.85_cvmix_r8)*ddiff
++        end if
++      end if
++    end do
++    CVmix_vars%diff_iface(CVmix_vars%nlev+1,:) = 0.0_cvmix_r8
++
++!EOC
++
++  end subroutine cvmix_coeffs_ddiff
++
++!BOP
++
++! !IROUTINE: cvmix_put_ddiff_real
++! !INTERFACE:
++
++  subroutine cvmix_put_ddiff_real(CVmix_ddiff_params, varname, val)
++
++! !DESCRIPTION:
++!  Write a real value into a cvmix\_ddiff\_params\_type variable.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    character(len=*), intent(in) :: varname
++    real(cvmix_r8),   intent(in) :: val
++
++! !OUTPUT PARAMETERS:
++    type(cvmix_ddiff_params_type), intent(inout) :: CVmix_ddiff_params
++!EOP
++!BOC
++
++    select case (trim(varname))
++      case ('strat_param_max')
++        CVmix_ddiff_params%strat_param_max = val
++      case ('ddiff_exp1')
++        CVmix_ddiff_params%ddiff_exp1 = val
++      case ('ddiff_exp2')
++        CVmix_ddiff_params%ddiff_exp2 = val
++      case ('kappa_ddiff_param1')
++        CVmix_ddiff_params%kappa_ddiff_param1 = val
++      case ('kappa_ddiff_param2')
++        CVmix_ddiff_params%kappa_ddiff_param2 = val
++      case ('kappa_ddiff_param3')
++        CVmix_ddiff_params%kappa_ddiff_param3 = val
++      case ('kappa_ddiff_t')
++        CVmix_ddiff_params%kappa_ddiff_t = val
++      case ('kappa_ddiff_s')
++        CVmix_ddiff_params%kappa_ddiff_s = val
++      case ('mol_diff')
++        CVmix_ddiff_params%mol_diff = val
++      case DEFAULT
++        print*, "ERROR: ", trim(varname), " not a valid choice!"
++        stop 1
++      
++    end select
++
++!EOC
++
++  end subroutine cvmix_put_ddiff_real
++
++!BOP
++
++! !IROUTINE: cvmix_get_ddiff_real
++! !INTERFACE:
++
++  function cvmix_get_ddiff_real(CVmix_ddiff_params, varname)
++
++! !DESCRIPTION:
++!  Return the real value of a cvmix\_ddiff\_params\_type variable.
++!  NOTE: This function is not efficient and is only for infrequent
++!  queries of ddiff parameters, such as at initialization.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    type(cvmix_ddiff_params_type), intent(in) :: CVmix_ddiff_params
++    character(len=*),              intent(in) :: varname
++
++! !OUTPUT PARAMETERS:
++    real(cvmix_r8) :: cvmix_get_ddiff_real
++!EOP
++!BOC
++
++    cvmix_get_ddiff_real = 0.0_cvmix_r8
++    select case (trim(varname))
++      case ('strat_param_max')
++        cvmix_get_ddiff_real = CVmix_ddiff_params%strat_param_max
++      case ('ddiff_exp1')
++        cvmix_get_ddiff_real = CVmix_ddiff_params%ddiff_exp1
++      case ('ddiff_exp2')
++        cvmix_get_ddiff_real = CVmix_ddiff_params%ddiff_exp2
++      case ('kappa_ddiff_param1')
++        cvmix_get_ddiff_real = CVmix_ddiff_params%kappa_ddiff_param1
++      case ('kappa_ddiff_param2')
++        cvmix_get_ddiff_real = CVmix_ddiff_params%kappa_ddiff_param2
++      case ('kappa_ddiff_param3')
++        cvmix_get_ddiff_real = CVmix_ddiff_params%kappa_ddiff_param3
++      case ('kappa_ddiff_t')
++        cvmix_get_ddiff_real = CVmix_ddiff_params%kappa_ddiff_t
++      case ('kappa_ddiff_s')
++        cvmix_get_ddiff_real = CVmix_ddiff_params%kappa_ddiff_s
++      case ('mol_diff')
++        cvmix_get_ddiff_real = CVmix_ddiff_params%mol_diff
++      case DEFAULT
++        print*, "ERROR: ", trim(varname), " not a valid choice!"
++        stop 1
++      
++    end select
++
++!EOC
++
++  end function cvmix_get_ddiff_real
++
++end module cvmix_ddiff
+--- /dev/null
++++ mpas-ocean-model-1.0/src/core_ocean/cvmix/cvmix_background.F90
+@@ -0,0 +1,891 @@
++module cvmix_background
++
++!BOP
++!\newpage
++! !MODULE: cvmix_background
++!
++! !DESCRIPTION:
++!  This module contains routines to initialize the derived types needed for
++!  time independent static background mixing coefficients.  It specifies
++!  either a scalar, 1D, or 2D field for viscosity and diffusivity. It also
++!  calculates the background diffusivity using the Bryan-Lewis method.
++!  It then sets the viscosity and diffusivity to the specified value.
++!\\
++!\\
++
++! !REVISION HISTORY:
++!  SVN:$Id: cvmix_background.F90 183 2013-07-11 21:11:32Z mike.levy.work@gmail.com $
++!  SVN:$URL: http://cvmix.googlecode.com/svn/trunk/src/shared/cvmix_background.F90 $
++
++! !USES:
++
++  use cvmix_kinds_and_types, only : cvmix_PI,                  &
++                                    cvmix_r8,                  &
++                                    cvmix_data_type,           &
++                                    cvmix_global_params_type
++!EOP
++
++  implicit none
++  private
++  save
++
++!BOP
++
++! !PUBLIC MEMBER FUNCTIONS:
++
++   public :: cvmix_init_bkgnd
++   public :: cvmix_coeffs_bkgnd
++   public :: cvmix_bkgnd_lvary_horizontal
++   public :: cvmix_bkgnd_static_diff
++   public :: cvmix_bkgnd_static_visc
++   public :: cvmix_put_bkgnd
++   public :: cvmix_get_bkgnd_real_2D
++
++  interface cvmix_init_bkgnd
++    module procedure cvmix_init_bkgnd_scalar
++    module procedure cvmix_init_bkgnd_1D
++    module procedure cvmix_init_bkgnd_2D
++    module procedure cvmix_init_bkgnd_BryanLewis
++  end interface cvmix_init_bkgnd
++
++  interface cvmix_put_bkgnd
++    module procedure cvmix_put_bkgnd_real
++    module procedure cvmix_put_bkgnd_real_1D
++    module procedure cvmix_put_bkgnd_real_2D
++  end interface cvmix_put_bkgnd
++
++! !PUBLIC TYPES:
++
++  ! cvmix_bkgnd_params_type contains the necessary parameters for background
++  ! mixing. Background mixing fields can vary from level to level as well as
++  ! over latitude and longitude.
++  type, public :: cvmix_bkgnd_params_type
++      private
++      real(cvmix_r8), allocatable :: static_visc(:,:) ! ncol, nlev+1
++      real(cvmix_r8), allocatable :: static_diff(:,:) ! ncol, nlev+1
++
++      ! Note: need to include some logic to avoid excessive memory use
++      !       when static_visc and static_diff are constant or 1-D
++      logical                     :: lvary_vertical   ! True => second dim not 1
++      logical                     :: lvary_horizontal ! True => first dim not 1
++  end type cvmix_bkgnd_params_type
++
++!EOP
++
++  type(cvmix_bkgnd_params_type), target :: CVmix_bkgnd_params_saved
++
++contains
++
++!BOP
++
++! !IROUTINE: cvmix_init_bkgnd_scalar
++! !INTERFACE:
++
++  subroutine cvmix_init_bkgnd_scalar(bkgnd_diff, bkgnd_visc, CVmix_bkgnd_params_user)
++
++! !DESCRIPTION:
++!  Initialization routine for static background mixing coefficients. For each
++!  column, this routine sets the static viscosity / diffusivity to the given
++!  scalar constants.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    real(cvmix_r8), intent(in) :: bkgnd_diff
++    real(cvmix_r8), intent(in) :: bkgnd_visc
++
++! !OUTPUT PARAMETERS:
++    type(cvmix_bkgnd_params_type), optional, target, intent(inout) :: &
++                                              CVmix_bkgnd_params_user
++!EOP
++!BOC
++
++    type(cvmix_bkgnd_params_type), pointer :: CVmix_bkgnd_params_out
++
++    CVmix_bkgnd_params_out => CVmix_bkgnd_params_saved
++    if (present(CVmix_bkgnd_params_user)) then
++      CVmix_bkgnd_params_out => CVmix_bkgnd_params_user
++    end if
++
++    if (.not.allocated(CVmix_bkgnd_params_out%static_visc)) then
++      CVmix_bkgnd_params_out%lvary_vertical   = .false.
++      CVmix_bkgnd_params_out%lvary_horizontal = .false.
++      allocate(CVmix_bkgnd_params_out%static_visc(1,1))
++      allocate(CVmix_bkgnd_params_out%static_diff(1,1))
++
++      ! Set static_visc and static_diff in background_input_type
++      CVmix_bkgnd_params_out%static_visc(1,1) = bkgnd_visc
++      CVmix_bkgnd_params_out%static_diff(1,1) = bkgnd_diff
++    end if
++    ! else error out... can't call init twice!
++
++!EOC
++
++  end subroutine cvmix_init_bkgnd_scalar
++
++!BOP
++
++! !IROUTINE: cvmix_init_bkgnd_1D
++! !INTERFACE:
++
++  subroutine cvmix_init_bkgnd_1D(bkgnd_diff, bkgnd_visc, ncol,                &
++                                 CVmix_params_user, CVmix_bkgnd_params_user)
++
++! !DESCRIPTION:
++!  Initialization routine for static background mixing coefficients. For each
++!  column, this routine sets the static viscosity / diffusivity to the given
++!  1D field. If field varies horizontally, need to include ncol!
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    real(cvmix_r8), dimension(:),   intent(in) :: bkgnd_diff
++    real(cvmix_r8), dimension(:),   intent(in) :: bkgnd_visc
++    integer, optional,              intent(in) :: ncol
++    type(cvmix_global_params_type), optional, target, intent(in) :: &
++                                                  CVmix_params_user
++
++! !OUTPUT PARAMETERS:
++    type(cvmix_bkgnd_params_type),  optional, target, intent(inout) :: &
++                                               CVmix_bkgnd_params_user
++!EOP
++!BOC
++
++    ! local vars
++    integer :: nlev
++    type(cvmix_global_params_type), pointer :: CVmix_params_in
++    type(cvmix_bkgnd_params_type),  pointer :: CVmix_bkgnd_params_out
++
++    nullify(CVmix_params_in)
++    if (present(CVmix_params_user)) then
++      CVmix_params_in => CVmix_params_user
++    endif
++
++    CVmix_bkgnd_params_out => CVmix_bkgnd_params_saved
++    if (present(CVmix_bkgnd_params_user)) then
++      CVmix_bkgnd_params_out => CVmix_bkgnd_params_user
++    end if
++
++    ! NOTE: need to verify that bkgnd_visc and bkgnd_diff are ncol x 1 or
++    !       1 x nlev+1
++
++    if (.not.allocated(CVmix_bkgnd_params_out%static_visc)) then
++      if (present(ncol)) then
++        CVmix_bkgnd_params_out%lvary_vertical   = .false.
++        CVmix_bkgnd_params_out%lvary_horizontal = .true.
++        allocate(CVmix_bkgnd_params_out%static_visc(ncol,1))
++        allocate(CVmix_bkgnd_params_out%static_diff(ncol,1))
++
++        ! Set static_visc and static_diff in background_input_type
++        CVmix_bkgnd_params_out%static_visc(:,1) = bkgnd_visc(:)
++        CVmix_bkgnd_params_out%static_diff(:,1) = bkgnd_diff(:)
++      else
++        nlev = CVmix_params_in%max_nlev
++        CVmix_bkgnd_params_out%lvary_vertical   = .true.
++        CVmix_bkgnd_params_out%lvary_horizontal = .false.
++        allocate(CVmix_bkgnd_params_out%static_visc(1,nlev+1))
++        allocate(CVmix_bkgnd_params_out%static_diff(1,nlev+1))
++
++        ! Set static_visc and static_diff in background_input_type
++        CVmix_bkgnd_params_out%static_visc(1,:) = bkgnd_visc(:)
++        CVmix_bkgnd_params_out%static_diff(1,:) = bkgnd_diff(:)
++      end if
++    end if
++    ! else error out... can't call init twice!
++
++!EOC
++
++  end subroutine cvmix_init_bkgnd_1D
++
++!BOP
++
++! !IROUTINE: cvmix_init_bkgnd_2D
++! !INTERFACE:
++
++  subroutine cvmix_init_bkgnd_2D(bkgnd_diff, bkgnd_visc, ncol,                &
++                                 CVmix_params_user, CVmix_bkgnd_params_user)
++
++! !DESCRIPTION:
++!  Initialization routine for static background mixing coefficients. For each
++!  column, this routine sets the static viscosity / diffusivity to the given
++!  2D field.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    type(cvmix_global_params_type), target, optional, intent(in) :: &
++                                                  CVmix_params_user
++    real(cvmix_r8), dimension(:,:), intent(in) :: bkgnd_diff
++    real(cvmix_r8), dimension(:,:), intent(in) :: bkgnd_visc
++    integer,                        intent(in) :: ncol
++
++! !OUTPUT PARAMETERS:
++    type(cvmix_bkgnd_params_type),  target, optional, intent(inout) :: &
++                                               CVmix_bkgnd_params_user
++!EOP
++!BOC
++
++    ! local vars
++    integer :: nlev
++    type(cvmix_global_params_type), pointer :: CVmix_params_in
++    type(cvmix_bkgnd_params_type),  pointer :: CVmix_bkgnd_params_out
++
++    nullify(CVmix_params_in)
++    if (present(CVmix_params_user)) then
++      CVmix_params_in => CVmix_params_user
++    endif
++
++    CVmix_bkgnd_params_out => CVmix_bkgnd_params_saved
++    if (present(CVmix_bkgnd_params_user)) then
++      CVmix_bkgnd_params_out => CVmix_bkgnd_params_user
++    end if
++
++    ! NOTE: need to verify that bkgnd_visc and bkgnd_diff are ncol x nlev+1
++
++    if (.not.allocated(CVmix_bkgnd_params_out%static_visc)) then
++      CVmix_bkgnd_params_out%lvary_vertical   = .true.
++      CVmix_bkgnd_params_out%lvary_horizontal = .true.
++      nlev = CVmix_params_in%max_nlev
++      allocate(CVmix_bkgnd_params_out%static_visc(ncol,nlev+1))
++      allocate(CVmix_bkgnd_params_out%static_diff(ncol,nlev+1))
++
++      ! Set static_visc and static_diff in background_input_type
++      CVmix_bkgnd_params_out%static_visc(:,:) = bkgnd_visc(:,:)
++      CVmix_bkgnd_params_out%static_diff(:,:) = bkgnd_diff(:,:)
++    end if
++ 
++!EOC
++
++  end subroutine cvmix_init_bkgnd_2D
++
++!BOP
++
++! !IROUTINE: cvmix_init_bkgnd_BryanLewis
++! !INTERFACE:
++
++  subroutine cvmix_init_bkgnd_BryanLewis(CVmix_vars, bl1, bl2, bl3, bl4,      &
++                                         CVmix_params_user,                   &
++                                         CVmix_bkgnd_params_user)
++
++! !DESCRIPTION:
++!  Initialization routine for Bryan-Lewis diffusivity/viscosity calculation.
++!  For each column, this routine sets the static viscosity \& diffusivity
++!  based on the specified parameters. Note that the units of these parameters
++!  must be consistent with the units of viscosity and diffusivity -- either
++!  cgs or mks, but do not mix and match!
++!  \\
++!  \\
++!  The Bryan-Lewis parameterization is based on the following:
++!  \begin{eqnarray*}
++!  \kappa_{BL} &=& \textrm{bl1} + \frac{\textrm{bl2}}{\pi}\tan^{-1}\bigg(
++!                  \textrm{bl3}(|z|-\textrm{bl4})\bigg)\\
++!  \nu_{BL} &=& \textrm{Pr}\cdot\kappa_{BL}
++!  \end{eqnarray*}
++!  This method is based on the following paper:
++!  \begin{quote}
++!  \emph{A Water Mass Model of the World Ocean}\\
++!  K. Bryan and L. J. Lewis\\
++!  Journal of Geophysical Research, vol 84 (1979), pages 2503-2517.
++!  \end{quote}
++!
++!  In that paper, they recommend the parameters 
++!  \begin{itemize}
++!  \item[] bl1 $= 8 \cdot 10^{-5}$ m$^2/$s
++!  \item[] bl2 $= 1.05 \cdot 10^{-4}$ m$^2/$s
++!  \item[] bl3 $= 4.5 \cdot 10^{-3}$ m$^{-1}$
++!  \item[] bl4 $= 2500$ m
++!  \end{itemize}
++!  However, more recent usage of their scheme may warrant different settings.
++!    
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    ! Contains depth and nlev
++    type(cvmix_data_type),          intent(in) :: CVmix_vars
++    ! Contains Prandtl
++    type(cvmix_global_params_type), target, optional, intent(in)  :: &
++                                                   CVmix_params_user
++
++    ! Units are first column if CVmix_data%depth is m, second if cm
++    real(cvmix_r8), intent(in) :: bl1,     &! m^2/s or cm^2/s
++                                  bl2,     &! m^2/s or cm^2/s
++                                  bl3,     &! 1/m   or 1/cm
++                                  bl4       ! m     or cm
++
++! !OUTPUT PARAMETERS:
++    type(cvmix_bkgnd_params_type),  target, optional, intent(inout) :: &
++                                               CVmix_bkgnd_params_user
++!EOP
++!BOC
++
++    ! Pointers to parameter data type
++    type(cvmix_global_params_type), pointer :: CVmix_params_in
++    type(cvmix_bkgnd_params_type),  pointer :: CVmix_bkgnd_params_out
++
++    ! Local index
++    integer :: nlev  ! max number of levels
++
++    ! Local copies to make code easier to read
++    real(cvmix_r8), dimension(:), allocatable :: visc, diff, zw
++
++    nullify(CVmix_params_in)
++    if (present(CVmix_params_user)) then
++      CVmix_params_in => CVmix_params_user
++    endif
++
++    CVmix_bkgnd_params_out => CVmix_bkgnd_params_saved
++    if (present(CVmix_bkgnd_params_user)) then
++      CVmix_bkgnd_params_out => CVmix_bkgnd_params_user
++    end if
++
++    nlev = CVmix_params_in%max_nlev
++    allocate(zw(nlev+1))
++    allocate(visc(nlev+1))
++    allocate(diff(nlev+1))
++    
++    ! Set static_visc and static_diff in background_input_type
++    zw   = abs(CVmix_vars%zw_iface)
++    diff = bl1 + (bl2/cvmix_PI)*atan(bl3*(zw-bl4))
++    visc = CVmix_params_in%prandtl*diff
++
++    call cvmix_put_bkgnd(CVmix_bkgnd_params_out, "static_diff", diff, nlev=nlev)
++    call cvmix_put_bkgnd(CVmix_bkgnd_params_out, "static_visc", visc, nlev=nlev)
++    deallocate(zw, visc, diff)
++
++!EOC
++
++  end subroutine cvmix_init_bkgnd_BryanLewis
++
++!BOP
++
++! !IROUTINE: cvmix_coeffs_bkgnd
++! !INTERFACE:
++
++  subroutine cvmix_coeffs_bkgnd(CVmix_vars, colid, CVmix_bkgnd_params_user)
++
++! !DESCRIPTION:
++!  Computes vertical tracer and velocity mixing coefficients for static
++!  background mixing. This routine simply copies viscosity / diffusivity
++!  values from CVmix\_bkgnd\_params to CVmix\_vars.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++
++    ! Need to know column for pulling data from static_visc and _diff
++    integer,                       intent(in) :: colid
++    type(cvmix_bkgnd_params_type), target, optional, intent(in) ::            &
++                                           CVmix_bkgnd_params_user
++
++! !INPUT/OUTPUT PARAMETERS:
++
++    type(cvmix_data_type), intent(inout) :: CVmix_vars
++!EOP
++!BOC
++
++!-----------------------------------------------------------------------
++!
++!  local variables
++!
++!-----------------------------------------------------------------------
++
++    integer :: nlev    ! Number of vertical levels
++    type(cvmix_bkgnd_params_type),  pointer :: CVmix_bkgnd_params_in
++       
++    CVmix_bkgnd_params_in => CVmix_bkgnd_params_saved
++    if (present(CVmix_bkgnd_params_user)) then
++      CVmix_bkgnd_params_in => CVmix_bkgnd_params_user
++    end if
++
++    nlev = CVmix_vars%nlev
++    if (CVmix_bkgnd_params_in%lvary_horizontal) then
++      if (CVmix_bkgnd_params_in%lvary_vertical) then
++        CVmix_vars%visc_iface(:)   =                            &
++                  CVmix_bkgnd_params_in%static_visc(colid,1:nlev+1)
++        CVmix_vars%diff_iface(:,1) =                            &
++                  CVmix_bkgnd_params_in%static_diff(colid,1:nlev+1)
++      else
++        CVmix_vars%visc_iface(:)   =                            &
++                  CVmix_bkgnd_params_in%static_visc(colid,1)
++        CVmix_vars%diff_iface(:,1) =                            &
++                  CVmix_bkgnd_params_in%static_diff(colid,1)
++      end if
++    else
++      if (CVmix_bkgnd_params_in%lvary_vertical) then
++        CVmix_vars%visc_iface(:)   =                          &
++                  CVmix_bkgnd_params_in%static_visc(1,1:nlev+1)
++        CVmix_vars%diff_iface(:,1) =                          &
++                  CVmix_bkgnd_params_in%static_diff(1,1:nlev+1)
++      else
++        CVmix_vars%visc_iface(:)   =                          &
++                  CVmix_bkgnd_params_in%static_visc(1,1)
++        CVmix_vars%diff_iface(:,1) =                          &
++                  CVmix_bkgnd_params_in%static_diff(1,1)
++      end if
++    end if
++
++!EOC
++
++  end subroutine cvmix_coeffs_bkgnd
++
++!BOP
++
++! !IROUTINE: cvmix_bkgnd_lvary_horizontal
++! !INTERFACE:
++
++  function cvmix_bkgnd_lvary_horizontal(CVmix_bkgnd_params_test)
++
++! !DESCRIPTION:
++!  Returns whether the background viscosity and diffusivity are
++!  varying with horizontal position.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    type(cvmix_bkgnd_params_type), intent(in) :: CVmix_bkgnd_params_test
++
++! !OUTPUT PARAMETERS:
++  logical :: cvmix_bkgnd_lvary_horizontal
++!EOP
++!BOC
++
++    cvmix_bkgnd_lvary_horizontal = CVmix_bkgnd_params_test%lvary_horizontal
++
++!EOC
++
++  end function cvmix_bkgnd_lvary_horizontal
++
++!BOP
++
++! !IROUTINE: cvmix_bkgnd_static_diff
++! !INTERFACE:
++
++  function cvmix_bkgnd_static_diff(CVmix_bkgnd_params_user,kw,colid)
++
++! !DESCRIPTION:
++!  Obtain the background diffusivity value at a position in a water column.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    type(cvmix_bkgnd_params_type), intent(in) :: CVmix_bkgnd_params_user
++    integer, optional, intent(in) :: kw, colid
++
++! !OUTPUT PARAMETERS:
++    real(cvmix_r8) :: cvmix_bkgnd_static_diff
++!EOP
++!BOC
++
++    ! Error checks
++    if (CVmix_bkgnd_params_user%lvary_horizontal) then
++      if (.not.present(colid)) then
++        print*, "ERROR: need to pass colid when static_diff varies across", &
++                " columns."
++        stop 1
++      end if
++    end if
++
++    if (CVmix_bkgnd_params_user%lvary_vertical) then
++      if (.not.present(kw)) then
++        print*, "ERROR: need to pass kw (level id) when static_diff varies", &
++                "across levels columns."
++        stop 1
++      end if
++    end if
++
++    if (CVmix_bkgnd_params_user%lvary_horizontal) then
++      if (CVmix_bkgnd_params_user%lvary_vertical) then
++        cvmix_bkgnd_static_diff = CVmix_bkgnd_params_user%static_diff(colid, kw)
++      else
++        cvmix_bkgnd_static_diff = CVmix_bkgnd_params_user%static_diff(colid, 1)
++      end if
++    else
++      if (CVmix_bkgnd_params_user%lvary_vertical) then
++        cvmix_bkgnd_static_diff = CVmix_bkgnd_params_user%static_diff(1, kw)
++      else
++        cvmix_bkgnd_static_diff = CVmix_bkgnd_params_user%static_diff(1, 1)
++      end if
++    end if
++
++!EOC
++
++  end function cvmix_bkgnd_static_diff
++
++!BOP
++
++! !IROUTINE: cvmix_bkgnd_static_visc
++! !INTERFACE:
++
++  function cvmix_bkgnd_static_visc(CVmix_bkgnd_params_user,kw,colid)
++
++! !DESCRIPTION:
++!  Obtain the background viscosity value at a position in a water column.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    type(cvmix_bkgnd_params_type), intent(in) :: CVmix_bkgnd_params_user
++    integer, optional, intent(in) :: kw, colid
++
++! !OUTPUT PARAMETERS:
++    real(cvmix_r8) :: cvmix_bkgnd_static_visc
++!EOP
++!BOC
++
++    ! Error checks
++    if (CVmix_bkgnd_params_user%lvary_horizontal) then
++      if (.not.present(colid)) then
++        print*, "ERROR: need to pass colid when static_visc varies across", &
++                " columns."
++        stop 1
++      end if
++    end if
++
++    if (CVmix_bkgnd_params_user%lvary_vertical) then
++      if (.not.present(kw)) then
++        print*, "ERROR: need to pass kw (level id) when static_visc varies", &
++                "across levels columns."
++        stop 1
++      end if
++    end if
++
++    if (CVmix_bkgnd_params_user%lvary_horizontal) then
++      if (CVmix_bkgnd_params_user%lvary_vertical) then
++        cvmix_bkgnd_static_visc = CVmix_bkgnd_params_user%static_visc(colid, kw)
++      else
++        cvmix_bkgnd_static_visc = CVmix_bkgnd_params_user%static_visc(colid, 1)
++      end if
++    else
++      if (CVmix_bkgnd_params_user%lvary_vertical) then
++        cvmix_bkgnd_static_visc = CVmix_bkgnd_params_user%static_visc(1, kw)
++      else
++        cvmix_bkgnd_static_visc = CVmix_bkgnd_params_user%static_visc(1, 1)
++      end if
++    end if
++
++!EOC
++
++  end function cvmix_bkgnd_static_visc
++
++!BOP
++
++! !IROUTINE: cvmix_put_bkgnd_real
++! !INTERFACE:
++
++  subroutine cvmix_put_bkgnd_real(CVmix_bkgnd_params_put, varname, val)
++
++! !DESCRIPTION:
++!  Write a real value into a cvmix\_bkgnd\_params\_type variable.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    character(len=*), intent(in) :: varname
++    real(cvmix_r8),   intent(in) :: val
++
++! !OUTPUT PARAMETERS:
++    type(cvmix_bkgnd_params_type), intent(inout) :: CVmix_bkgnd_params_put
++!EOP
++!BOC
++
++    select case (trim(varname))
++      case ('static_visc')
++        if (.not.allocated(CVmix_bkgnd_params_put%static_visc)) then
++          allocate(CVmix_bkgnd_params_put%static_visc(1,1))
++          CVmix_bkgnd_params_put%lvary_horizontal=.false.
++          CVmix_bkgnd_params_put%lvary_vertical=.false.
++        else
++          print*, "WARNING: overwriting static_visc in cvmix_bkgnd_params_type."
++        end if
++        CVmix_bkgnd_params_put%static_visc(:,:) = val
++
++      case ('static_diff')
++        if (.not.allocated(CVmix_bkgnd_params_put%static_diff)) then
++          allocate(CVmix_bkgnd_params_put%static_diff(1,1))
++          CVmix_bkgnd_params_put%lvary_horizontal=.false.
++          CVmix_bkgnd_params_put%lvary_vertical=.false.
++        else
++          print*, "WARNING: overwriting static_diff in cvmix_bkgnd_params_type."
++        end if
++        CVmix_bkgnd_params_put%static_diff(:,:) = val
++
++      case DEFAULT
++        print*, "ERROR: ", trim(varname), " not a valid choice!"
++        stop 1
++      
++    end select
++
++!EOC
++
++  end subroutine cvmix_put_bkgnd_real
++
++!BOP
++
++! !IROUTINE: cvmix_put_bkgnd_real_1D
++! !INTERFACE:
++
++  subroutine cvmix_put_bkgnd_real_1D(CVmix_bkgnd_params_put, varname, val, &
++                                    ncol, nlev)
++
++! !DESCRIPTION:
++!  Write an array of real values into a cvmix\_bkgnd\_params\_type variable.
++!  You must use \verb|opt='horiz'| to specify that the field varies in the
++!  horizontal direction, otherwise it is assumed to vary in the vertical.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    character(len=*),             intent(in) :: varname
++    real(cvmix_r8), dimension(:), intent(in) :: val
++    integer, optional,            intent(in) :: ncol, nlev
++
++! !OUTPUT PARAMETERS:
++    type (cvmix_bkgnd_params_type), intent(inout) :: CVmix_bkgnd_params_put
++!EOP
++!BOC
++
++    ! Local vars
++    integer, dimension(2) :: dims
++    integer               :: data_dims
++    logical               :: lvary_horizontal
++
++    ! Error checking to make sure dimension is specified
++    if ((.not.present(ncol)).and.(.not.present(nlev))) then
++      print*, "ERROR: when putting 1D data in cvmix_bkgnd_params_type ", &
++              "you must specify nlev or ncol!"
++      stop 1
++    end if
++
++    if ((present(ncol)).and.(present(nlev))) then
++      print*, "ERROR: when putting 1D data in cvmix_bkgnd_params_type ", &
++              "you can not specify both nlev or ncol!"
++      stop 1
++    end if
++
++    data_dims = size(val)
++    if (present(ncol)) then
++      if (data_dims.gt.ncol) then
++        print*, "ERROR: data array is bigger than number of columns specified."
++        stop 1
++      end if
++      lvary_horizontal=.true.
++      dims(1) = ncol
++      dims(2) = 1
++    else
++      if (data_dims.gt.nlev+1) then
++        print*, "ERROR: data array is bigger than number of levels specified."
++        stop 1
++      end if
++      lvary_horizontal=.false.
++      dims(1) = 1
++      dims(2) = nlev+1
++    end if
++
++    select case (trim(varname))
++      case ('static_visc')
++        if (.not.allocated(CVmix_bkgnd_params_put%static_visc)) then
++          allocate(CVmix_bkgnd_params_put%static_visc(dims(1),dims(2)))
++          CVmix_bkgnd_params_put%lvary_horizontal = lvary_horizontal
++          CVmix_bkgnd_params_put%lvary_vertical = .not.lvary_horizontal
++        else
++          print*, "WARNING: overwriting static_visc in cvmix_bkgnd_params_type."
++        end if
++        if (any(shape(CVmix_bkgnd_params_put%static_visc).ne.dims)) then
++          print*, "ERROR: dimensions of static_visc do not match what was ", &
++                  "sent to cvmix_put"
++          stop 1
++        end if
++        if (lvary_horizontal) then
++          CVmix_bkgnd_params_put%static_visc(:,1)           = 0_cvmix_r8
++          CVmix_bkgnd_params_put%static_visc(1:data_dims,1) = val
++        else
++          CVmix_bkgnd_params_put%static_visc(1,:)           = 0_cvmix_r8
++          CVmix_bkgnd_params_put%static_visc(1,1:data_dims) = val
++        end if
++
++      case ('static_diff')
++        if (.not.allocated(CVmix_bkgnd_params_put%static_diff)) then
++          allocate(CVmix_bkgnd_params_put%static_diff(dims(1),dims(2)))
++          CVmix_bkgnd_params_put%lvary_horizontal = lvary_horizontal
++          CVmix_bkgnd_params_put%lvary_vertical = .not.lvary_horizontal
++        else
++          print*, "WARNING: overwriting static_diff in cvmix_bkgnd_params_type."
++        end if
++        if (any(shape(CVmix_bkgnd_params_put%static_diff).ne.dims)) then
++          print*, "ERROR: dimensions of static_diff do not match what was ", &
++                  "sent to cvmix_put"
++          stop 1
++        end if
++        if (lvary_horizontal) then
++          CVmix_bkgnd_params_put%static_diff(:,1)           = 0_cvmix_r8
++          CVmix_bkgnd_params_put%static_diff(1:data_dims,1) = val
++        else
++          CVmix_bkgnd_params_put%static_diff(1,:)           = 0_cvmix_r8
++          CVmix_bkgnd_params_put%static_diff(1,1:data_dims) = val
++        end if
++
++      case DEFAULT
++        print*, "ERROR: ", trim(varname), " not a valid choice!"
++        stop 1
++      
++    end select
++
++!EOC
++
++  end subroutine cvmix_put_bkgnd_real_1D
++
++!BOP
++
++! !IROUTINE: cvmix_put_bkgnd_real_2D
++! !INTERFACE:
++
++  subroutine cvmix_put_bkgnd_real_2D(CVmix_bkgnd_params_put, varname, val, &
++                                    ncol, nlev)
++
++! !DESCRIPTION:
++!  Write a 2D array of real values into a cvmix\_bkgnd\_params\_type variable.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    character(len=*),               intent(in) :: varname
++    real(cvmix_r8), dimension(:,:), intent(in) :: val
++    integer,                        intent(in) :: ncol, nlev
++
++! !OUTPUT PARAMETERS:
++    type (cvmix_bkgnd_params_type), intent(out) :: CVmix_bkgnd_params_put
++!EOP
++!BOC
++
++    ! Local vars
++    integer, dimension(2) :: dims, data_dims
++
++    dims      = (/ncol, nlev+1/)
++    data_dims = shape(val)
++
++    if (any(data_dims.gt.dims)) then
++      print*, "ERROR: data being put in cvmix_bkgnd_params_type is larger ", &
++              "than (ncol, nlev+1)"
++      stop 1
++    end if
++
++    select case (trim(varname))
++      case ('static_visc')
++        if (.not.allocated(CVmix_bkgnd_params_put%static_visc)) then
++          allocate(CVmix_bkgnd_params_put%static_visc(dims(1),dims(2)))
++          CVmix_bkgnd_params_put%lvary_horizontal=.true.
++          CVmix_bkgnd_params_put%lvary_vertical=.true.
++        else
++          print*, "WARNING: overwriting static_visc in cvmix_bkgnd_params_type."
++        end if
++        if (any(shape(CVmix_bkgnd_params_put%static_visc).ne.dims)) then
++          print*, "ERROR: dimensions of static_visc do not match what was ", &
++                  "sent to cvmix_put"
++          stop 1
++        end if
++        CVmix_bkgnd_params_put%static_visc = 0.0_cvmix_r8
++        CVmix_bkgnd_params_put%static_visc(1:data_dims(1), 1:data_dims(2)) = val
++
++      case ('static_diff')
++        if (.not.allocated(CVmix_bkgnd_params_put%static_diff)) then
++          allocate(CVmix_bkgnd_params_put%static_diff(dims(1),dims(2)))
++          CVmix_bkgnd_params_put%lvary_horizontal=.true.
++          CVmix_bkgnd_params_put%lvary_vertical=.true.
++        else
++          print*, "WARNING: overwriting static_diff in cvmix_bkgnd_params_type."
++        end if
++        if (any(shape(CVmix_bkgnd_params_put%static_diff).ne.dims)) then
++          print*, "ERROR: dimensions of static_diff do not match what was ", &
++                  "sent to cvmix_put"
++          stop 1
++        end if
++        CVmix_bkgnd_params_put%static_diff = 0.0_cvmix_r8
++        CVmix_bkgnd_params_put%static_diff(1:data_dims(1), 1:data_dims(2)) = val
++
++      case DEFAULT
++        print*, "ERROR: ", trim(varname), " not a valid choice!"
++        stop 1
++      
++    end select
++
++!EOC
++
++  end subroutine cvmix_put_bkgnd_real_2D
++
++!BOP
++
++! !IROUTINE: cvmix_get_bkgnd_real_2D
++! !INTERFACE:
++
++  function cvmix_get_bkgnd_real_2D(CVmix_bkgnd_params_get, varname)
++
++! !DESCRIPTION:
++!  Read the real values of a cvmix\_bkgnd\_params\_type 2D array variable.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    type(cvmix_bkgnd_params_type), intent(in) :: CVmix_bkgnd_params_get
++    character(len=*),              intent(in) :: varname
++
++! !OUTPUT PARAMETERS:
++    real(cvmix_r8), dimension(size(CVmix_bkgnd_params_get%static_visc,1),    &
++                              size(CVmix_bkgnd_params_get%static_visc,2)) :: &
++                    cvmix_get_bkgnd_real_2D
++!EOP
++!BOC
++
++    select case (trim(varname))
++      case ('static_visc')
++        cvmix_get_bkgnd_real_2D = CVmix_bkgnd_params_get%static_visc(:,:)
++
++      case ('static_diff')
++        cvmix_get_bkgnd_real_2D = CVmix_bkgnd_params_get%static_diff(:,:)
++
++      case DEFAULT
++        print*, "ERROR: ", trim(varname), " not a valid choice!"
++        stop 1
++      
++    end select
++
++!EOC
++
++  end function cvmix_get_bkgnd_real_2D
++
++
++end module cvmix_background
++
+--- /dev/null
++++ mpas-ocean-model-1.0/src/core_ocean/cvmix/INSTALL
+@@ -0,0 +1,54 @@
++CVMix library installation guide
++--------------------------------
++
++This document describes how to build the CVMix library. Note that the steps
++described in this document will not build any executables, it is only meant to
++produce libcvmix.a and several .mod files that should be linked to or included
++in an outside ocean model. To build one of the provided stand-alone drivers,
++see $CVMIX/README.
++
++There are two different ways to build libcvmix.a and its associated .mod files.
++
++1) If you have downloaded the entire CVMix package, you can go to
++   $CVMIX/src/shared and run
++
++   $ make
++
++   You may be prompted for information about your compiler and netCDF location.
++   The netCDF location is only used in compiling the standalone drivers (and
++   only if you want to output in netCDF format), so you can leave that field
++   blank if you wish.
++
++   This will result in files being created in three locations:
++
++   $CVMIX/lib -- libcvmix.a will be placed in here. When you link a program
++                 using the CVMix library, use -L$CVMIX/lib -lcvmix
++
++   $CVMIX/include -- a handful of .mod files while be placed here. When you
++                     build a program using the CVMix lbirary, use
++                     -I$CVMIX/include
++
++   $CVMIX/bld/obj -- a handful of .mod and .o files will be placed here. The .o
++                     files have already been placed in libcvmix.a and the .mod
++                     files have already been copied to the include/ directory,
++                     so these files are not needed any more.
++
++2) If you have just downloaded the $CVMIX/src/shared directory as an external
++   to your model, you need to specify several necessary compilation options.
++
++   FC -- your fortran compiler
++   FCFLAGS -- any compiler flags you wish to pass (default: nothing is passed)
++   OBJ_DIR -- where to put .o and .mod files when building (default: this dir)
++   LIB_DIR -- where to put libcvmix.a (default: this dir)
++   INC_DIR -- where to put the .mod files (default: this dir)
++
++   For example, if you want to keep libcvmix.a in /projects/cvmix/lib and all
++   the .mod files in /projects/cvmix/include, and you use the intel compiler
++   with O2 optimization, you can run
++
++   $ make FC=ifort FCFLAGS="-O2" LIB_DIR=/project/cvmix/lib \
++         INC_DIR=/projects/cvmix/include
++
++   Note that this will still write the .o and .mod files to the current
++   directory, so if you do not have write permissions you must also set
++   OBJ_DIR.
+--- /dev/null
++++ mpas-ocean-model-1.0/src/core_ocean/cvmix/cvmix_shear.F90
+@@ -0,0 +1,431 @@
++ module cvmix_shear
++
++!BOP
++!\newpage
++! !MODULE: cvmix_shear
++!
++! !DESCRIPTION:
++!  This module contains routines to initialize the derived types needed for
++!  shear mixing, and to set the viscosity and diffusivity coefficients.
++!  Presently this scheme has implemented the shear mixing parameterizations
++!  from Pacanowski \& Philander (1981) and Large, McWilliams, \& Doney (1994).
++!\\
++!\\
++!
++! !REVISION HISTORY:
++!  SVN:$Id: cvmix_shear.F90 155 2013-06-07 19:08:49Z mike.levy.work@gmail.com $
++!  SVN:$URL: http://cvmix.googlecode.com/svn/trunk/src/shared/cvmix_shear.F90 $
++
++! !USES:
++
++   use cvmix_kinds_and_types, only : one,                          &
++                                     cvmix_r8,                     &
++                                     cvmix_strlen,                 &
++                                     cvmix_data_type
++   use cvmix_background, only :      cvmix_bkgnd_params_type,      &
++                                     cvmix_bkgnd_lvary_horizontal, &
++                                     cvmix_bkgnd_static_diff,      &
++                                     cvmix_bkgnd_static_visc
++!EOP
++
++   implicit none
++   private
++   save
++
++!BOP
++
++! !PUBLIC MEMBER FUNCTIONS:
++
++   public :: cvmix_init_shear
++   public :: cvmix_coeffs_shear
++   public :: cvmix_put_shear
++   public :: cvmix_get_shear_real
++   public :: cvmix_get_shear_str
++
++   interface cvmix_put_shear
++     module procedure cvmix_put_shear_real
++     module procedure cvmix_put_shear_str
++   end interface cvmix_put_shear
++
++! !PUBLIC TYPES:
++
++  ! cvmix_shear_params_type contains the necessary parameters for shear mixing
++  ! (currently Pacanowski-Philander or Large et al)
++  type, public :: cvmix_shear_params_type
++      private
++      character(len=cvmix_strlen) :: mix_scheme
++      real(cvmix_r8)              :: PP_nu_zero
++      real(cvmix_r8)              :: PP_alpha
++      real(cvmix_r8)              :: PP_exp
++      real(cvmix_r8)              :: KPP_nu_zero
++      real(cvmix_r8)              :: KPP_Ri_zero
++      real(cvmix_r8)              :: KPP_exp
++  end type cvmix_shear_params_type
++!EOP
++
++ contains
++
++!BOP
++
++! !IROUTINE: cvmix_init_shear
++! !INTERFACE:
++
++  subroutine cvmix_init_shear(CVmix_shear_params, mix_scheme,  &
++                              PP_nu_zero, PP_alpha, PP_exp, &
++                              KPP_nu_zero, KPP_Ri_zero, KPP_exp)
++
++! !DESCRIPTION:
++!  Initialization routine for shear (Richardson number-based) mixing. There are
++!  currently two supported schemes - set \verb|mix_scheme = 'PP'| to use the
++!  Pacanowski-Philander mixing scheme or set \verb|mix_scheme = 'KPP'| to use
++!  the interior mixing scheme laid out in Large et al.
++!\\
++!\\
++!  PP requires setting $\nu_0$ (\verb|PP_nu_zero| in this routine), $alpha$ 
++!  (\verb|PP_alpha|), and $n$ (\verb|PP_exp|), and returns
++!  \begin{eqnarray*}
++!  \nu_{PP} & = & \frac{\nu_0}{(1+\alpha \textrm{Ri})^n} + \nu_b \\
++!  \kappa_{PP} & = & \frac{\nu}{1+\alpha \textrm{Ri}} + \kappa_b
++!  \end{eqnarray*}
++!  Note that $\nu_b$ and $\kappa_b$ are set in \verb|cvmix_init_bkgnd()|, which
++!  needs to be called separately from this routine.
++! \\
++! \\
++! KPP requires setting $\nu^0$ (\verb|KPP_nu_zero|, $\textrm{Ri}_0 
++! ($\verb|KPP_Ri_zero|), and $p_1$ (\verb|KPP_exp|),  and returns
++! $$
++! \nu_{KPP} = \left\{
++! \begin{array}{r l}
++! \nu^0 & \textrm{Ri} < 0\\
++! \nu^0 \left[1 - \frac{\textrm{Ri}}{\textrm{Ri}_0}^2\right]^{p_1}
++!       & 0 < \textrm{Ri}
++!           < \textrm{Ri}_0 \\
++! 0     & \textrm{Ri}_0 < \textrm{Ri}
++! \end{array} \right.
++! $$
++!
++! !USES:
++!  Only those used by entire module.
++
++! !INPUT PARAMETERS:
++    character(len=*),         intent(in) :: mix_scheme 
++    real(cvmix_r8), optional, intent(in) :: PP_nu_zero, PP_alpha, PP_exp, &
++                                            KPP_nu_zero, KPP_Ri_zero, KPP_exp
++
++! !OUTPUT PARAMETERS:
++    type(cvmix_shear_params_type), intent(inout) :: CVmix_shear_params
++!EOP
++!BOC
++
++    select case (trim(mix_scheme))
++      case ('PP')
++        if (.not.(present(PP_nu_zero) .and. present(PP_alpha) .and.        &
++                  present(PP_exp))) then
++          print*, "ERROR: you must specify PP_nu_zero, PP_alpha, and PP_exp", &
++                  " to use Pacanowski-Philander mixing!"
++          stop 1
++        end if
++        call cvmix_put_shear(CVmix_shear_params, "mix_scheme", "PP")
++        call cvmix_put_shear(CVmix_shear_params, "PP_nu_zero", PP_nu_zero)
++        call cvmix_put_shear(CVmix_shear_params, "PP_alpha", PP_alpha)
++        call cvmix_put_shear(CVmix_shear_params, "PP_exp", PP_exp)
++
++      case ('KPP')
++        if (.not.(present(KPP_nu_zero) .and. present(KPP_Ri_zero) .and.       &
++                  present(KPP_exp))) then
++          print*, "ERROR: you must specify KPP_nu_zero, KPP_alpha, and", &
++                  " KPP_exp to use Pacanowski-Philander mixing!"
++          stop 1
++        end if
++        call cvmix_put_shear(CVmix_shear_params, "mix_scheme", "KPP")
++        call cvmix_put_shear(CVmix_shear_params, "KPP_nu_zero", KPP_nu_zero)
++        call cvmix_put_shear(CVmix_shear_params, "KPP_Ri_zero", KPP_Ri_zero)
++        call cvmix_put_shear(CVmix_shear_params, "KPP_exp", KPP_exp)
++
++      case DEFAULT
++        print*, "ERROR: ", trim(mix_scheme), " is not a valid choice for ", &
++                "shear mixing."
++        stop 1
++
++    end select
++
++!EOC
++
++  end subroutine cvmix_init_shear
++
++!BOP
++
++! !IROUTINE: cvmix_coeffs_shear
++! !INTERFACE:
++
++  subroutine cvmix_coeffs_shear(CVmix_vars, CVmix_shear_params,    &
++                                CVmix_bkgnd_params, colid, no_diff)
++
++! !DESCRIPTION:
++!  Computes vertical tracer and velocity mixing coefficients for
++!  shear-type mixing parameterizatiions. Note that Richardson number
++!  is needed at both T-points and U-points.
++!\\
++!\\
++!
++! !USES:
++!  only those used by entire module.
++
++! !INPUT PARAMETERS:
++    type(cvmix_shear_params_type),           intent(in) :: CVmix_shear_params
++    ! PP mixing requires CVmix_bkgnd_params
++    type(cvmix_bkgnd_params_type), optional, intent(in) :: CVmix_bkgnd_params
++    ! colid is only needed if CVmix_bkgnd_params%lvary_horizontal is true
++    integer,                       optional, intent(in) :: colid
++    logical,                       optional, intent(in) :: no_diff
++
++! !INPUT/OUTPUT PARAMETERS:
++    type(cvmix_data_type), intent(inout) :: CVmix_vars
++!EOP
++!BOC
++
++    integer                   :: kw ! vertical cell index
++    logical                   :: calc_diff
++    real(cvmix_r8)            :: nu
++    real(cvmix_r8)            :: nu_zero, PP_alpha, KPP_Ri_zero, loc_exp
++    real(cvmix_r8)            :: bkgnd_diff, bkgnd_visc
++    real(cvmix_r8), pointer, dimension(:) :: RICH
++
++    ! Pointer to make the code more legible
++    RICH => CVmix_vars%Ri_iface
++    if (.not.present(no_diff)) then
++      calc_diff = .true.
++    else
++      calc_diff = .not.no_diff
++    end if
++
++    select case (trim(CVmix_shear_params%mix_scheme))
++      case ('PP')
++        ! Error checks
++        if (.not.present(CVmix_bkgnd_params)) then
++          print*, "ERROR: can not run PP mixing without background mixing."
++          stop 1
++        end if
++        if (cvmix_bkgnd_lvary_horizontal(CVmix_bkgnd_params).and.(.not.present(colid))) then
++          print*, "ERROR: background visc and diff vary in horizontal so you", &
++                  "must pass column index to cvmix_coeffs_shear"
++          stop 1
++        end if
++
++        ! Copy parameters to make the code more legible
++        nu_zero  = CVmix_shear_params%PP_nu_zero
++        PP_alpha = CVmix_shear_params%PP_alpha
++        loc_exp  = CVmix_shear_params%PP_exp
++
++        ! Pacanowski-Philander
++        do kw=1,CVmix_vars%nlev+1
++          bkgnd_diff = cvmix_bkgnd_static_diff(CVmix_bkgnd_params, kw, colid)
++          bkgnd_visc = cvmix_bkgnd_static_visc(CVmix_bkgnd_params, kw, colid)
++          nu = nu_zero/((one+PP_alpha*RICH(kw))**loc_exp)+bkgnd_visc
++          CVmix_vars%visc_iface(kw) = nu
++          if (calc_diff) &
++            CVmix_vars%diff_iface(kw,1) = nu/(one+PP_alpha*RICH(kw)) + bkgnd_diff
++        end do
++
++      case ('KPP')
++        ! Copy parameters to make the code more legible
++        nu_zero     = CVmix_shear_params%KPP_nu_zero
++        KPP_Ri_zero = CVmix_shear_params%KPP_Ri_zero
++        loc_exp     = CVmix_shear_params%KPP_exp
++
++        ! Large, et al
++        do kw=1,CVmix_vars%nlev+1
++            if (RICH(kw).lt.0) then
++              CVmix_vars%diff_iface(kw,1) = nu_zero
++            else if (RICH(kw).lt.KPP_Ri_zero) then
++              CVmix_vars%diff_iface(kw,1) = nu_zero * (one -                  &
++                   (RICH(kw)/KPP_Ri_zero)**2)**loc_exp
++            else ! Ri_g >= Ri_zero
++              CVmix_vars%diff_iface(kw,1) = 0
++            end if
++        end do
++        ! to do: include global params for prandtl number!
++        CVmix_vars%visc_iface = CVmix_vars%diff_iface(:,1)
++
++      case DEFAULT
++        ! Note: this error should be caught in cvmix_init_shear
++        print*, "ERROR: invalid choice for type of shear mixing."
++        stop 1
++
++    end select
++
++!EOC
++
++  end subroutine cvmix_coeffs_shear
++
++!BOP
++
++! !IROUTINE: cvmix_put_shear_real
++! !INTERFACE:
++
++  subroutine cvmix_put_shear_real(CVmix_shear_params, varname, val)
++
++! !DESCRIPTION:
++!  Write a real value into a cvmix\_shear\_params\_type variable.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    character(len=*), intent(in) :: varname
++    real(cvmix_r8),   intent(in) :: val
++
++! !OUTPUT PARAMETERS:
++    type(cvmix_shear_params_type), intent(inout) :: CVmix_shear_params
++!EOP
++!BOC
++
++    select case (trim(varname))
++      case ('PP_nu_zero')
++        CVmix_shear_params%PP_nu_zero = val
++      case ('PP_alpha')
++        CVmix_shear_params%PP_alpha = val
++      case ('PP_exp')
++        CVmix_shear_params%PP_exp = val
++      case ('KPP_nu_zero')
++        CVmix_shear_params%KPP_nu_zero = val
++      case ('KPP_Ri_zero')
++        CVmix_shear_params%KPP_Ri_zero = val
++      case ('KPP_exp')
++        CVmix_shear_params%KPP_exp = val
++      case DEFAULT
++        print*, "ERROR: ", trim(varname), " not a valid choice!"
++        stop 1
++      
++    end select
++
++!EOC
++
++  end subroutine cvmix_put_shear_real
++
++!BOP
++
++! !IROUTINE: cvmix_put_shear_str
++! !INTERFACE:
++
++  subroutine cvmix_put_shear_str(CVmix_shear_params, varname, val)
++
++! !DESCRIPTION:
++!  Write a string into a cvmix\_shear\_params\_type variable.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    character(len=*), intent(in) :: varname
++    character(len=*), intent(in) :: val
++
++! !OUTPUT PARAMETERS:
++    type(cvmix_shear_params_type), intent(inout) :: CVmix_shear_params
++!EOP
++!BOC
++
++    select case (trim(varname))
++      case ('mix_scheme')
++        CVmix_shear_params%mix_scheme = val
++      case DEFAULT
++        print*, "ERROR: ", trim(varname), " not a valid choice!"
++        stop 1
++      
++    end select
++
++!EOC
++
++  end subroutine cvmix_put_shear_str
++
++!BOP
++
++! !IROUTINE: cvmix_get_shear_real
++! !INTERFACE:
++
++  function cvmix_get_shear_real(CVmix_shear_params, varname)
++
++! !DESCRIPTION:
++!  Read the real value of a cvmix\_shear\_params\_type variable.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    type(cvmix_shear_params_type), intent(in) :: CVmix_shear_params
++    character(len=*),              intent(in) :: varname
++
++! !OUTPUT PARAMETERS:
++    real(cvmix_r8) :: cvmix_get_shear_real
++!EOP
++!BOC
++
++    cvmix_get_shear_real = 0.0_cvmix_r8
++    select case (trim(varname))
++      case ('PP_nu_zero')
++        cvmix_get_shear_real =CVmix_shear_params%PP_nu_zero
++      case ('PP_alpha')
++        cvmix_get_shear_real =CVmix_shear_params%PP_alpha
++      case ('PP_exp')
++        cvmix_get_shear_real =CVmix_shear_params%PP_exp
++      case ('KPP_nu_zero')
++        cvmix_get_shear_real =CVmix_shear_params%KPP_nu_zero
++      case ('KPP_Ri_zero')
++        cvmix_get_shear_real =CVmix_shear_params%KPP_Ri_zero
++      case ('KPP_exp')
++        cvmix_get_shear_real =CVmix_shear_params%KPP_exp
++      case DEFAULT
++        print*, "ERROR: ", trim(varname), " not a valid choice!"
++        stop 1
++      
++    end select
++
++!EOC
++
++  end function cvmix_get_shear_real
++
++!BOP
++
++! !IROUTINE: cvmix_get_shear_str
++! !INTERFACE:
++
++  function cvmix_get_shear_str(CVmix_shear_params, varname)
++
++! !DESCRIPTION:
++!  Read the string contents of a cvmix\_shear\_params\_type variable.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    type(cvmix_shear_params_type), intent(in) :: CVmix_shear_params
++    character(len=*),              intent(in) :: varname
++
++! !OUTPUT PARAMETERS:
++    character(len=cvmix_strlen) :: cvmix_get_shear_str
++!EOP
++!BOC
++
++    select case (trim(varname))
++      case ('mix_scheme')
++        cvmix_get_shear_str =CVmix_shear_params%mix_scheme
++      case DEFAULT
++        print*, "ERROR: ", trim(varname), " not a valid choice!"
++        stop 1
++      
++    end select
++
++!EOC
++
++  end function cvmix_get_shear_str
++
++
++end module cvmix_shear
+--- /dev/null
++++ mpas-ocean-model-1.0/src/core_ocean/cvmix/cvmix_put_get.F90
+@@ -0,0 +1,446 @@
++module cvmix_put_get
++
++!BOP
++!\newpage
++! !MODULE: cvmix_put_get
++!
++! !DESCRIPTION:
++!  This module contains routines to pack data into the cvmix datatypes
++!  (allocating memory as necessary) and then unpack the data out. If we switch
++!  to pointers, the pack will just point at the right target and the unpack
++!  will be un-necessary.
++!\\
++!\\
++
++! !REVISION HISTORY:
++!  SVN:$Id: cvmix_put_get.F90 175 2013-06-28 05:57:33Z mike.levy.work@gmail.com $
++!  SVN:$URL: http://cvmix.googlecode.com/svn/trunk/src/shared/cvmix_put_get.F90 $
++
++! !USES:
++
++   use cvmix_kinds_and_types, only : cvmix_r8,                  &
++                                     cvmix_data_type,           &
++                                     cvmix_global_params_type
++!EOP
++
++  implicit none
++  private
++  save
++
++!BOP
++
++! !PUBLIC MEMBER FUNCTIONS:
++  public :: cvmix_put
++
++  interface cvmix_put
++    module procedure cvmix_put_int
++    module procedure cvmix_put_real
++    module procedure cvmix_put_real_1D
++    module procedure cvmix_put_global_params_int
++    module procedure cvmix_put_global_params_real
++  end interface cvmix_put
++!EOP
++
++contains
++
++!BOP
++
++! !IROUTINE: cvmix_put_int
++! !INTERFACE:
++
++  subroutine cvmix_put_int(CVmix_vars, varname, val, opts)
++
++! !DESCRIPTION:
++!  Write an integer value into a cvmix\_data\_type variable.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    character(len=*),           intent(in) :: varname
++    integer,                    intent(in) :: val
++    character(len=*), optional, intent(in) :: opts
++
++! !OUTPUT PARAMETERS:
++    type(cvmix_data_type), intent(inout) :: CVmix_vars
++!EOP
++!BOC
++
++    ! Local variables
++    integer :: nlev
++  
++    nlev = CVmix_vars%nlev
++
++    if ((trim(varname).ne.'nlev').and.(nlev.eq.-1)) then
++      print*, "ERROR: you must specify the number of levels before ", &
++              "you can pack data into a cvmix_data_type!"
++      print*, "You tried to set ", trim(varname)
++      stop 1
++    end if
++    
++    select case (trim(varname))
++      case ('nlev')
++        CVmix_vars%nlev = val
++      case default
++        ! All other scalars are real(cvmix_r8)
++        call cvmix_put_real(CVmix_vars, varname, real(val,cvmix_r8), opts)
++    end select
++!EOC
++
++  end subroutine cvmix_put_int
++
++!BOP
++
++! !IROUTINE: cvmix_put_real
++! !INTERFACE:
++
++  subroutine cvmix_put_real(CVmix_vars, varname, val, opts)
++
++! !DESCRIPTION:
++!  Write a real value into a cvmix\_data\_type variable.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    character(len=*),           intent(in) :: varname
++    real(cvmix_r8),             intent(in) :: val
++    character(len=*), optional, intent(in) :: opts
++
++! !OUTPUT PARAMETERS:
++    type(cvmix_data_type), intent(inout) :: CVmix_vars
++!EOP
++!BOC
++
++    ! Local variables
++    integer :: nlev
++  
++    nlev = CVmix_vars%nlev
++
++    if (nlev.eq.-1) then
++      print*, "ERROR: you must specify the number of levels before ", &
++              "you can pack data into a cvmix_data_type!"
++      print*, "You tried to set ", trim(varname)
++      stop 1
++    end if
++    
++    select case (trim(varname))
++      case ('surf_hgt')
++        CVmix_vars%surf_hgt = val
++      case ('ocn_depth','depth')
++        CVmix_vars%ocn_depth = val
++      case ('OBL_depth')
++        CVmix_vars%OBL_depth = val
++      case ('lat')
++        CVmix_vars%lat = val
++      case ('lon')
++        CVmix_vars%lon = val
++      case ('diff')
++        if (.not.associated(CVmix_vars%diff_iface)) then
++          allocate(CVmix_vars%diff_iface(nlev+1,2))
++        end if
++        if (present(opts)) then
++          select case (trim(opts))
++            case ('col1')
++              CVmix_vars%diff_iface(:,1) = val
++            case ('col2')
++              CVmix_vars%diff_iface(:,2) = val
++            case DEFAULT
++              print*, "WARNING: ignoring opts = ", trim(opts)
++              CVmix_vars%diff_iface      = val
++          end select
++        end if
++      case ('visc')
++      if (.not.associated(CVmix_vars%visc_iface)) then
++        allocate(CVmix_vars%visc_iface(nlev+1))
++      end if
++      CVmix_vars%visc_iface(:) = val
++
++      case ('dens')
++      print*, "WARNING: you are setting the density in all levels to a", &
++              "constant value"
++      if (.not.associated(CVmix_vars%dens)) then
++        allocate(CVmix_vars%dens(nlev))
++      end if
++      CVmix_vars%dens(:) = val
++
++      case ('dens_lwr')
++      print*, "WARNING: you are setting the density in all levels to a", &
++              "constant value"
++      if (.not.associated(CVmix_vars%dens_lwr)) then
++        allocate(CVmix_vars%dens_lwr(nlev))
++      end if
++      CVmix_vars%dens_lwr(:) = val
++
++      case ('Ri', 'Ri_iface')
++      print*, "WARNING: you are setting the Richardson number in all", &
++              "levels to a constant value"
++      if (.not.associated(CVmix_vars%Ri_iface)) then
++        allocate(CVmix_vars%Ri_iface(nlev+1))
++      end if
++      CVmix_vars%Ri_iface(:) = val
++
++      case ('dz', 'dzt')
++      print*, "WARNING: you are setting the cell thickness in all levels to", &
++              "a constant value"
++      if (.not.associated(CVmix_vars%dzt)) then
++        allocate(CVmix_vars%dzt(nlev))
++      end if
++      CVmix_vars%dzt(:) = val
++
++      case ('dzw', 'dzw_iface')
++      print*, "WARNING: you are setting the cell midpoint to midpoint", &
++              "distance in all levels to a constant value"
++      if (.not.associated(CVmix_vars%dzw_iface)) then
++        allocate(CVmix_vars%dzw_iface(nlev+1))
++      end if
++      CVmix_vars%dzw_iface(:) = val
++
++      case ('buoy', 'buoy_iface')
++      print*, "WARNING: you are setting the buoyancy in all levels to a", &
++              "constant value"
++      if (.not.associated(CVmix_vars%buoy_iface)) then
++        allocate(CVmix_vars%buoy_iface(nlev+1))
++      end if
++      CVmix_vars%buoy_iface(:) = val
++
++      case ('strat_param_num')
++      print*, "WARNING: you are setting the numerator of the statification", & 
++              "parameter in all levels to a constant value"
++      if (.not.associated(CVmix_vars%strat_param_num)) then
++        allocate(CVmix_vars%strat_param_num(nlev))
++      end if
++      CVmix_vars%strat_param_num(:) = val
++
++      case ('strat_param_denom')
++      print*, "WARNING: you are setting the denominator of the statification",& 
++              "parameter in all levels to a constant value"
++      if (.not.associated(CVmix_vars%strat_param_denom)) then
++        allocate(CVmix_vars%strat_param_denom(nlev))
++      end if
++      CVmix_vars%strat_param_denom(:) = val
++
++      case default
++        print*, "ERROR: ", trim(varname), " not a valid choice!"
++        stop 1
++      
++    end select
++!EOC
++
++  end subroutine cvmix_put_real
++
++!BOP
++
++! !IROUTINE: cvmix_put_real_1D
++! !INTERFACE:
++
++  subroutine cvmix_put_real_1D(CVmix_vars, varname, val, opts)
++
++! !DESCRIPTION:
++!  Write an array of real values into a cvmix\_data\_type variable.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    character(len=*),             intent(in) :: varname
++    real(cvmix_r8), dimension(:), intent(in) :: val
++    character(len=*), optional,   intent(in) :: opts
++
++! !OUTPUT PARAMETERS:
++    type(cvmix_data_type), intent(inout) :: CVmix_vars
++!EOP
++!BOC
++
++    ! Local variables
++    integer :: nlev
++  
++    nlev = CVmix_vars%nlev
++
++    if (nlev.eq.-1) then
++      print*, "ERROR: you must specify the number of levels before ", &
++              "you can pack data into a cvmix_data_type!"
++      print*, "You tried to set ", trim(varname)
++      stop 1
++    end if
++    
++    select case (trim(varname))
++      case ('diff')
++      if (.not.associated(CVmix_vars%diff_iface)) then
++        allocate(CVmix_vars%diff_iface(nlev+1,2))
++      end if
++      if (present(opts)) then
++        select case (trim(opts))
++          case ('col1')
++            CVmix_vars%diff_iface(:,1) = val
++          case ('col2')
++            CVmix_vars%diff_iface(:,2) = val
++          case DEFAULT
++            print*, "WARNING: ignoring opts = ", trim(opts)
++            CVmix_vars%diff_iface(:,1) = val
++            CVmix_vars%diff_iface(:,2) = val
++        end select
++      end if
++
++      case ('visc')
++      if (.not.associated(CVmix_vars%visc_iface)) then
++        allocate(CVmix_vars%visc_iface(nlev+1))
++      end if
++      CVmix_vars%visc_iface(:) = val
++
++      case ('dens')
++      if (.not.associated(CVmix_vars%dens)) then
++        allocate(CVmix_vars%dens(nlev))
++      end if
++      CVmix_vars%dens(:) = val
++
++      case ('dens_lwr')
++      if (.not.associated(CVmix_vars%dens_lwr)) then
++        allocate(CVmix_vars%dens_lwr(nlev))
++      end if
++      CVmix_vars%dens_lwr(:) = val
++
++      case ('Ri', 'Ri_iface')
++      if (.not.associated(CVmix_vars%Ri_iface)) then
++        allocate(CVmix_vars%Ri_iface(nlev+1))
++      end if
++      CVmix_vars%Ri_iface(:) = val
++
++      case ('z', 'zt')
++      if (.not.associated(CVmix_vars%zt)) then
++        allocate(CVmix_vars%zt(nlev))
++      end if
++      CVmix_vars%zt(:) = val
++
++      case ('dz', 'dzt')
++      if (.not.associated(CVmix_vars%dzt)) then
++        allocate(CVmix_vars%dzt(nlev))
++      end if
++      CVmix_vars%dzt(:) = val
++
++      case ('zw', 'zw_iface')
++      if (.not.associated(CVmix_vars%zw_iface)) then
++        allocate(CVmix_vars%zw_iface(nlev+1))
++      end if
++      CVmix_vars%zw_iface(:) = val
++
++      case ('dzw', 'dzw_iface')
++      if (.not.associated(CVmix_vars%dzw_iface)) then
++        allocate(CVmix_vars%dzw_iface(nlev+1))
++      end if
++      CVmix_vars%dzw_iface(:) = val
++
++      case ('buoy', 'buoy_iface')
++      if (.not.associated(CVmix_vars%buoy_iface)) then
++        allocate(CVmix_vars%buoy_iface(nlev+1))
++      end if
++      CVmix_vars%buoy_iface(:) = val
++
++      case ('strat_param_num')
++      if (.not.associated(CVmix_vars%strat_param_num)) then
++        allocate(CVmix_vars%strat_param_num(nlev))
++      end if
++      CVmix_vars%strat_param_num(:) = val
++
++      case ('strat_param_denom')
++      if (.not.associated(CVmix_vars%strat_param_denom)) then
++        allocate(CVmix_vars%strat_param_denom(nlev))
++      end if
++      CVmix_vars%strat_param_denom(:) = val
++
++      case default
++        print*, "ERROR: ", trim(varname), " not a valid choice!"
++        stop 1
++      
++    end select
++
++!EOC
++
++  end subroutine cvmix_put_real_1D
++
++!BOP
++
++! !IROUTINE: cvmix_put_global_params_int
++! !INTERFACE:
++
++  subroutine cvmix_put_global_params_int(CVmix_params, varname, val)
++
++! !DESCRIPTION:
++!  Write an integer value into a cvmix\_global\_params\_type variable.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    character(len=*), intent(in) :: varname
++    integer,          intent(in) :: val
++
++! !OUTPUT PARAMETERS:
++    type (cvmix_global_params_type), intent(inout) :: CVmix_params
++!EOP
++!BOC
++
++    select case (trim(varname))
++      case ('max_nlev')
++        CVmix_params%max_nlev = val
++        
++      case default
++        print*, "ERROR: ", trim(varname), " not a valid choice!"
++        stop 1
++      
++    end select
++!EOC
++
++  end subroutine cvmix_put_global_params_int
++
++!BOP
++
++! !IROUTINE: cvmix_put_global_params_real
++! !INTERFACE:
++
++  subroutine cvmix_put_global_params_real(CVmix_params, varname, val)
++
++! !DESCRIPTION:
++!  Write a real value into a cvmix\_global\_params\_type variable.
++!\\
++!\\
++
++! !USES:
++!  Only those used by entire module. 
++
++! !INPUT PARAMETERS:
++    character(len=*), intent(in) :: varname
++    real(cvmix_r8),   intent(in) :: val
++
++! !OUTPUT PARAMETERS:
++    type(cvmix_global_params_type), intent(inout) :: CVmix_params
++!EOP
++!BOC
++
++    select case (trim(varname))
++      case ('prandtl')
++        CVmix_params%prandtl = val
++      case ('fw_rho')
++        CVmix_params%fw_rho  = val
++      case ('sw_rho')
++        CVmix_params%sw_rho  = val
++        
++      case default
++        print*, "ERROR: ", trim(varname), " not a valid choice!"
++        stop 1
++      
++    end select
++!EOC
++
++  end subroutine cvmix_put_global_params_real
++
++end module cvmix_put_get
++
+--- /dev/null
++++ mpas-ocean-model-1.0/src/core_ocean/cvmix/makedep.py
+@@ -0,0 +1,69 @@
++#!/usr/bin/env python
++
++# usage: makedep.py $(DEP_FILE) $(OBJ_DIR) $(SRC_DIR) [$(SRC_DIR2)]
++
++# Generate $DEP_FILE in $OBJ_DIR (arguments 1 and 2, respectively)
++# Read in every file in $SRC_DIR and $SRC_DIR2 (arguments 3 and 4)
++# Only depend on modules located in $SRC_DIR or $SRC_DIR2
++
++import os, sys, re
++
++try:
++  dep_file = sys.argv[1]
++except:
++  dep_file = "depends.d"
++
++try:
++  obj_dir = sys.argv[2]
++except:
++  obj_dir = '.'
++
++try:
++  src_dir = sys.argv[3]
++except:
++  src_dir = '.'
++
++try:
++  src_dir2 = sys.argv[4]
++except:
++  src_dir2 = src_dir
++
++try:
++  inc_dir = sys.argv[5]
++  files_in_inc_dir = os.listdir(inc_dir)
++except:
++  inc_dir = 'NONE'
++
++fout = open(dep_file, 'w')
++files_in_src_dir =  os.listdir(src_dir)
++if src_dir != src_dir2:
++  files_in_src_dir.extend(os.listdir(src_dir2))
++
++for src_file in files_in_src_dir:
++  file_name, file_ext = os.path.splitext(src_file)
++  if file_ext == '.F90':
++    try:
++      fin = open(src_dir+'/'+src_file,"r")
++    except:
++      fin = open(src_dir2+'/'+src_file,"r")
++    for line in fin:
++      if re.match('^ *[Uu][Ss][Ee]',line):
++        line_array = line.split()
++        # statements are usually "use module, only : subroutine"
++        # so we need to strip away the , to get the module name
++        file_used = line_array[1].split(',')[0]
++        if file_used+'.F90' in files_in_src_dir:
++          print file_name+'.o depends on '+file_used+'.o'
++          fout.write(obj_dir+'/'+file_name+'.o: '+obj_dir+'/'+file_used+'.o\n')
++        else:
++          if inc_dir != 'NONE':
++            if file_used+'.mod' in files_in_inc_dir:
++              print file_name+'.o depends on '+file_used+'.mod'
++              fout.write(obj_dir+'/'+file_name+'.o: '+inc_dir+'/'+file_used+'.mod\n')
++            else:
++              # Check for upper case
++              file_used = file_used.upper()
++              if file_used+'.mod' in files_in_inc_dir:
++                print file_name+'.o depends on '+file_used+'.mod'
++                fout.write(obj_dir+'/'+file_name+'.o: '+inc_dir+'/'+file_used+'.mod\n')
++    fin.close
