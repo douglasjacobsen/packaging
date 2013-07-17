@@ -1,0 +1,12 @@
+usr/include/pnetcdf.h
+usr/include/pnetcdf.inc
+usr/include/pnetcdf.mod
+usr/lib/libpnetcdf.a
+usr/bin/ncmpidiff
+usr/bin/ncmpidump
+usr/bin/ncmpigen
+usr/bin/ncvalid
+usr/man/man1/ncmpidiff.1
+usr/man/man1/ncmpidump.1
+usr/man/man1/ncmpigen.1
+usr/man/man3/pnetcdf.3
