@@ -1,0 +1,5 @@
+modules (3.2.10-1ubuntu1~ppa1~precise1) precise; urgency=low
+
+  * Version 3.2.10 of the software modules package
+
+ -- Doug Jacobsen <jacobsen.douglas@gmail.com>  Tue, 16 Jul 2013 14:33:27 -0600

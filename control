@@ -1,0 +1,24 @@
+Source: modules
+Section: utils
+Priority: extra
+Maintainer: Doug Jacobsen <jacobsen.douglas@gmail.com>
+Build-Depends: debhelper (>= 8.0.0), autotools-dev, tcl, tclcl-dev, tcl-dev, tk-dev, tcl8.5
+Standards-Version: 3.9.3
+Homepage: http://modules.sourceforge.net/
+#Vcs-Git: git://git.debian.org/collab-maint/modules.git
+#Vcs-Browser: http://git.debian.org/?p=collab-maint/modules.git;a=summary
+
+Package: modules
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, tcl, tcl-dev, tk-dev, tcl8.5
+Description: Version 3.2.10 of the software modules pacakge.
+ Useful for easy modification of path and library variables.
+ Easily change compiler or library groups and versions.
+
+Package: modules-doc
+Architecture: all
+Description: documentation for modules
+ Useful for easy modification of path and library variables.
+ Easily change compiler or library groups and versions.
+
+
