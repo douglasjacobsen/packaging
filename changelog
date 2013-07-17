@@ -1,0 +1,5 @@
+libpio (1.7.2-1ubuntu1~ppa1~precise1) precise; urgency=low
+
+  * Version 1.7.2 of the Parallel I/O library.
+
+ -- Doug Jacobsen <jacobsen.douglas@gmail.com>  Thu, 11 Jul 2013 13:56:23 -0600

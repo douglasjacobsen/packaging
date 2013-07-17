@@ -1,0 +1,17 @@
+Source: libpio
+Priority: extra
+Maintainer: Doug Jacobsen <jacobsen.douglas@gmail.com>
+Build-Depends: debhelper (>= 8.0.0), autotools-dev, gfortran, libnetcdf-dev, libopenmpi-dev, libpnetcdf-dev (>= 1.3.1-1), libpnetcdf-dev (<< 1.3.1-1.1)
+Standards-Version: 3.9.3
+Section: libs
+Homepage: https://code.google.com/p/parallelio/
+#Vcs-Git: git://git.debian.org/collab-maint/libpio.git
+#Vcs-Browser: http://git.debian.org/?p=collab-maint/libpio.git;a=summary
+
+Package: libpio-dev
+Section: libdevel
+Architecture: any
+Depends: ${misc:Depends}, libpnetcdf-dev, gfortran, libopenmpi-dev
+Description: Parallel I/O library version 1.7.2
+ Packaged Parallel I/O library version 1.7.2. Built with libnetcdf6, parallel-netcdf 1.3.1, gcc/gfortran 4.6.3
+
